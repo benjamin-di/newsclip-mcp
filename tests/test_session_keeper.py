@@ -705,7 +705,7 @@ def test_budget_writes_are_durable_across_power_loss(
 ) -> None:
     """A spent attempt must not be lost to an undurable rename."""
 
-    import newsclip.private_state as private_state
+    import signin_window.state as private_state
 
     synced: list[Path] = []
     real_fsync = private_state.fsync_directory

@@ -57,6 +57,22 @@ The default deployment is reachable only on the server itself. For phone or
 remote-client access, configure an HTTPS public origin and reverse proxy as
 explained in [deployment](docs/DEPLOYMENT.md).
 
+## Install the CLI or Python package
+
+For an existing Newsclip server, install the client from
+[PyPI](https://pypi.org/project/newsclip/) with Python 3.12 or later:
+
+```sh
+pip install newsclip
+newsclip --help
+newsclip --server http://127.0.0.1:8000/users/alice \
+  --token-file /path/to/alice.token search "energy markets" --source ap --json
+```
+
+The same package provides `newsclip.client.NewsclipClient` for Python programs.
+Use the Docker Compose quick start above for the complete server and sign-in
+browser setup.
+
 ## Interfaces
 
 For MCP, connect your client to
@@ -124,3 +140,11 @@ the public release source.
 
 [MIT](LICENSE) for original code. Dependencies retain their own licenses; see
 [NOTICE](NOTICE). Newsclip is not affiliated with the supported publishers.
+
+
+Optional operator maintenance, per-account credential configuration and trusted
+reverse proxy deployment are described in [Maintenance](docs/MAINTENANCE.md).
+Human sign-in remains the default; maintenance uses the same public package
+with separate runtime authority.
+
+See [Upgrading](docs/UPGRADING.md) for account, maintenance and health-contract changes.

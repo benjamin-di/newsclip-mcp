@@ -8,6 +8,7 @@ services:
     ports:
       - "127.0.0.1:${NEWSCLIP_PORT:-8000}:8000"
     environment:
+      NEWSCLIP_CONFIG_HOME: /config
       NEWSCLIP_USERS_FILE: /config/users.json
       NEWSCLIP_LOGIN_TOKEN_FILE: /config/login.token
       NEWSCLIP_LOGIN_URL: http://newsclip-login:8080
@@ -37,6 +38,7 @@ services:
       target: login
     user: "${NEWSCLIP_UID:-1000}:${NEWSCLIP_GID:-1000}"
     environment:
+      NEWSCLIP_CONFIG_HOME: /config
       NEWSCLIP_USERS_FILE: /config/users.json
       NEWSCLIP_LOGIN_TOKEN_FILE: /config/login.token
     volumes:

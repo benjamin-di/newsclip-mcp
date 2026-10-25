@@ -136,20 +136,8 @@ class ProviderHealth(FrozenModel):
         return self.model_dump(mode="json")
 
 
-class IdentityHealth(FrozenModel):
-    """One identity target's stored upkeep state (``identity status``)."""
-
-    target: str
-    status: dict[str, Any] | None = None
-    state_error: Literal["state_unreadable"] | None = None
-
-    def public_dict(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
-
-
 class FleetHealth(FrozenModel):
     providers: tuple[ProviderHealth, ...] = ()
-    identities: tuple[IdentityHealth, ...] = ()
 
     def public_dict(self) -> dict[str, Any]:
         return self.model_dump(mode="json")
@@ -344,9 +332,7 @@ def collect_fleet_health(
                     evidence=evidence,
                 )
             )
-        return FleetHealth(
-            providers=tuple(entries), identities=_collect_identities(now)
-        )
+        return FleetHealth(providers=tuple(entries))
     finally:
         service.close()
 
@@ -404,17 +390,9 @@ def _defense_is_active(record: DefenseRecord | None, *, now: datetime) -> bool:
     )
 
 
-def _collect_identities(now: datetime) -> tuple[IdentityHealth, ...]:
-    from .extensions import local_extensions
-
-    extension = local_extensions()
-    return () if extension is None else extension.collect_identities(now)
-
-
 __all__ = [
     "FleetHealth",
     "HealthStateError",
-    "IdentityHealth",
     "ProviderHealth",
     "ServingHealth",
     "ServingStatus",

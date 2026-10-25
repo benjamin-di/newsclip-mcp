@@ -6,31 +6,27 @@ import asyncio
 import os
 import socket
 import tempfile
+from importlib.util import find_spec
 from pathlib import Path
 
 import httpx
 import uvicorn
 
 from newsclip.client import NewsclipClient
-from newsclip.extensions import local_extensions
-from newsclip.providers.builtins import BUILTIN_PROVIDER_REGISTRATIONS
 from newsclip.standalone import build_standalone_app
 from newsclip.tenancy import add_user
 
 
 async def main() -> None:
-    assert local_extensions() is None
+    assert find_spec("newsclip.local_extensions") is None
     assert not os.environ.get("OP_SERVICE_ACCOUNT_TOKEN")
-    assert all(
-        registration.build_auth_adapter is None
-        for registration in BUILTIN_PROVIDER_REGISTRATIONS.values()
-    )
     with tempfile.TemporaryDirectory(prefix="newsclip-smoke-") as directory:
         root = Path(directory)
         registry = root / "users.json"
         for user in ("alice", "bob"):
             add_user(registry, user, root / f"{user}.token")
         alice = (root / "alice.token").read_text().strip()
+        os.environ["NEWSCLIP_CONFIG_HOME"] = str(root / "config")
         os.environ["NEWSCLIP_STATE_HOME"] = str(root / "state")
         os.environ["NEWSCLIP_DATA_HOME"] = str(root / "data")
         with socket.socket() as channel:

@@ -243,7 +243,9 @@ def test_resolver_requires_stable_clearance_and_rechecks_after_mechanic(
 ) -> None:
     browser = Browser()
     now = [0.0]
-    monkeypatch.setattr("newsclip.challenge_resolver.time.monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        "signin_window.automation.resolver.time.monotonic", lambda: now[0]
+    )
 
     def detector(raw_browser: object) -> ChallengeDetection:
         assert isinstance(raw_browser, Browser)

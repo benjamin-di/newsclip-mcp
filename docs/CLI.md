@@ -49,6 +49,11 @@ and never displayed. `serve --users-file FILE` starts the multi-user server;
 `signin-service --users-file FILE` starts its private browser service. Use the
 reference Compose deployment for the required environment and browser policy.
 
+`users add-proxy USER --config FILE` registers an identity that authenticates
+only through a configured trusted proxy. Its registry entry has
+`"token_sha256": null`; it has no native bearer token. The proxy credential and
+verified identity header are both required, and unknown users are refused.
+
 `mcp` serves local stdio MCP. `mcp-http` uses the multi-user server when
 `NEWSCLIP_USERS_FILE` is configured; a legacy single-user HTTP deployment uses
 its dedicated bearer configuration.

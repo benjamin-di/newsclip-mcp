@@ -6,13 +6,14 @@ import hashlib
 import json
 import re
 import tomllib
-from functools import cache, lru_cache
+from functools import cache
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from lxml import etree
 from pydantic import Field, HttpUrl, field_validator, model_validator
+from signin_window.automation.auth import AuthObservationSpec as AuthObservationSpec
 
 from .acquisition import CandidateVerificationMode
 from .models import (
@@ -593,40 +594,6 @@ class BrowserLaunchSpec(FrozenModel):
         return self
 
 
-class AuthObservationSpec(FrozenModel):
-    any_selectors: tuple[str, ...] = ()
-    # Evidence that a control is not merely on the page but usable: visible,
-    # enabled, and not read-only. `any_selectors` tests geometry and CSS only,
-    # which cannot tell a live field from a read-only decoy — and a decoy is
-    # exactly what a two-step login renders for the step you are not on. A
-    # credential step selected by `any_selectors` therefore promises something
-    # `fill` cannot honour, and `fill` then blocks until it times out.
-    editable_selectors: tuple[str, ...] = ()
-    any_text: tuple[str, ...] = ()
-    any_path_contains: tuple[str, ...] = ()
-    required_selectors: tuple[str, ...] = ()
-    required_text: tuple[str, ...] = ()
-    required_hosts: tuple[str, ...] = ()
-    required_host_suffixes: tuple[str, ...] = ()
-    excluded_hosts: tuple[str, ...] = ()
-    excluded_path_prefixes: tuple[str, ...] = ()
-    absent_selectors: tuple[str, ...] = ()
-
-    @model_validator(mode="after")
-    def require_predicate(self) -> AuthObservationSpec:
-        if not any(self.model_dump(mode="python").values()):
-            raise ValueError("auth observation must contain evidence")
-        fields = self.model_dump(mode="python")
-        if any(not value.strip() for values in fields.values() for value in values):
-            raise ValueError("auth observation evidence cannot be blank")
-        hosts = self.required_hosts + self.required_host_suffixes + self.excluded_hosts
-        if any(host != host.lower() or "://" in host for host in hosts):
-            raise ValueError("auth observation hosts must be lowercase hostnames")
-        if any(not prefix.startswith("/") for prefix in self.excluded_path_prefixes):
-            raise ValueError("excluded auth paths must begin with a slash")
-        return self
-
-
 class TokenProbeSpec(FrozenModel):
     password_form_selector: str
     response_field_selector: str
@@ -981,17 +948,12 @@ def _canonical_json(value: object) -> str:
 
 
 @cache
-def load_provider_spec(key: str) -> ProviderSpec:
+def _load_provider_spec(key: str) -> ProviderSpec:
     if not is_provider_key(key):
         raise ProviderDefinitionError("invalid provider definition key")
     path = _DEFINITION_ROOT / f"{key}.toml"
     try:
         payload = tomllib.loads(path.read_text(encoding="utf-8"))
-        from .extensions import local_extensions
-
-        extension = local_extensions()
-        if extension is not None:
-            payload = extension.provider_settings(key, payload)
         spec = ProviderSpec.model_validate(payload)
     except (OSError, tomllib.TOMLDecodeError, ValueError) as error:
         raise ProviderDefinitionError(f"invalid provider definition: {key}") from error
@@ -1000,7 +962,19 @@ def load_provider_spec(key: str) -> ProviderSpec:
     return spec
 
 
-@lru_cache(maxsize=1)
+def load_provider_spec(key: str) -> ProviderSpec:
+    from .maintenance import provider_settings
+
+    base = _load_provider_spec(key)
+    configured = ProviderSpec.model_validate(
+        provider_settings(key, base.model_dump(mode="json"))
+    )
+    # Account settings affect authority, never the cached site/auth definition.
+    return base.model_copy(
+        update={"session": configured.session, "search": configured.search}
+    )
+
+
 def load_builtin_provider_specs() -> tuple[ProviderSpec, ...]:
     try:
         keys = tuple(path.stem for path in _DEFINITION_ROOT.glob("*.toml"))

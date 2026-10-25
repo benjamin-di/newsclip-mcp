@@ -12,7 +12,7 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends ca-certificates curl dumb-init libxtst6 xvfb \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY pyproject.toml uv.lock README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE NOTICE ./
 RUN uv sync --locked --no-dev --extra mcp --extra signin --no-install-project \
  && patchright install --with-deps chromium \
  && /app/.venv/bin/python -c "from pathlib import Path; import patchright; p = Path(patchright.__file__).parent / 'driver' / 'node'; p.unlink(); p.symlink_to('/usr/local/bin/browser-node')" \
@@ -23,6 +23,12 @@ COPY src ./src
 RUN uv sync --locked --no-dev --extra mcp --extra signin
 ARG VCS_REF=unknown
 ARG IMAGE_VERSION=development
+ARG BUILD_SOURCE_FINGERPRINT=
+ENV NEWSCLIP_BUILD_REVISION=${VCS_REF} NEWSCLIP_BUILD_DIRTY=0 \
+    NEWSCLIP_BUILD_SOURCE_FINGERPRINT=${BUILD_SOURCE_FINGERPRINT}
+RUN if [ -n "$BUILD_SOURCE_FINGERPRINT" ]; then \
+      test "$(python -c 'from pathlib import Path; from newsclip.provenance import build_source_identity; print(build_source_identity(Path("/app")).source_fingerprint)')" = "$BUILD_SOURCE_FINGERPRINT"; \
+    fi
 LABEL org.opencontainers.image.title="Newsclip" \
       org.opencontainers.image.description="Private news search, reading and archiving with human sign-in" \
       org.opencontainers.image.source="https://github.com/benjamin-di/newsclip-mcp" \
@@ -36,7 +42,7 @@ ENV NOVNC_DIR=/opt/novnc
 ARG NOVNC_VERSION=1.6.0
 ARG NOVNC_SHA256=5066103959ef4e9b10f37e5a148627360dd8414e4cf8a7db92bdbd022e728aaa
 RUN apt-get update \
- && apt-get install -y --no-install-recommends x11vnc fonts-noto-cjk \
+ && apt-get install -y --no-install-recommends x11vnc fonts-noto-cjk openssh-client \
  && curl --fail --silent --show-error --location \
       "https://github.com/novnc/noVNC/archive/refs/tags/v${NOVNC_VERSION}.tar.gz" -o /tmp/novnc.tar.gz \
  && printf '%s  /tmp/novnc.tar.gz\n' "$NOVNC_SHA256" | sha256sum --check --status \

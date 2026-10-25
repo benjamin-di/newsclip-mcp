@@ -5,6 +5,8 @@ from __future__ import annotations
 from enum import StrEnum
 
 from pydantic import model_validator
+from signin_window.automation.auth import AuthFailureBase
+from signin_window.automation.auth import CredentialAction as CredentialAction
 
 from .challenges import ChallengeMode as ChallengeMode
 from .models import (
@@ -73,16 +75,6 @@ class CandidateVerificationMode(StrEnum):
 
     HTTP_PROBE = "http_probe"
     BROWSER_PAID_PROBE = "browser_paid_probe"
-
-
-class CredentialAction(StrEnum):
-    """The strongest provider-owned credential action actually observed."""
-
-    NONE = "none"
-    PASSWORD_SUBMIT = "password_submit"
-    GOOGLE_PASSWORD_SUBMIT = "google_password_submit"
-    GOOGLE_PASSWORD_AUTO_SUBMIT = "google_password_auto_submit"
-    GOOGLE_TOTP_SUBMIT = "google_totp_submit"
 
 
 class MintFailureStage(StrEnum):
@@ -207,7 +199,7 @@ class LoginResult(FrozenModel):
         return value
 
 
-class AcquisitionFailure(RuntimeError):
+class AcquisitionFailure(AuthFailureBase):
     """Typed provider-flow failure with no raw DOM or exception text."""
 
     def __init__(

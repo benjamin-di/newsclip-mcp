@@ -3,6 +3,8 @@
 from datetime import UTC, datetime
 from threading import Event
 
+import pytest
+
 from newsclip.recovery import RecoveryStore
 from newsclip.recovery_watch import RecoveryWatch, _run
 
@@ -175,3 +177,31 @@ def test_busy_workers_rotate_without_failing_pending_requests(tmp_path):
         )
     finally:
         watcher.close()
+
+
+def test_watcher_entrypoint_uses_the_configured_account(monkeypatch, tmp_path):
+    import newsclip.recovery_watch as module
+    from newsclip.tenancy import current_user
+
+    monkeypatch.setenv("NEWSCLIP_STATE_HOME", str(tmp_path))
+    monkeypatch.setenv("NEWSCLIP_USER", "alice")
+    monkeypatch.setenv("NEWSCLIP_KEEPER_PROVIDERS", "ft")
+    monkeypatch.setattr("newsclip.process_signals.exit_on_sigterm", lambda: None)
+    observed = []
+
+    class Watcher:
+        def __init__(self, store, providers, **kwargs):
+            observed.append(store.root)
+
+        def tick(self):
+            assert current_user() == "alice"
+            raise SystemExit(0)
+
+        def close(self):
+            observed.append("closed")
+
+    monkeypatch.setattr(module, "RecoveryWatch", Watcher)
+    with pytest.raises(SystemExit):
+        module.main()
+    assert observed == [tmp_path / "users/alice/recovery", "closed"]
+    assert current_user() is None

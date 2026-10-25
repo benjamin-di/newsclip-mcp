@@ -683,10 +683,6 @@ class BearerAuthMiddleware:
 
 
 def _allowed_hosts() -> list[str]:
-    from .extensions import local_extensions
-
-    extension = local_extensions()
-    extras = [] if extension is None else extension.http_defaults()["hosts"]
     return [
         value.strip()
         for value in os.environ.get(
@@ -695,8 +691,7 @@ def _allowed_hosts() -> list[str]:
                 "127.0.0.1,127.0.0.1:*,localhost,localhost:*,"
                 "newsclip-mcp,newsclip-mcp:*,newsclip-ops,newsclip-ops:*,"
                 "host.docker.internal,host.docker.internal:*"
-            )
-            + ("," + ",".join(extras) if extras else ""),
+            ),
         ).split(",")
         if value.strip()
     ]
@@ -727,10 +722,6 @@ def _http_app(
 ) -> Any:
     """Stateless JSON streamable HTTP with strict Host/Origin validation."""
 
-    from .extensions import local_extensions
-
-    extension = local_extensions()
-    defaults = [] if extension is None else extension.http_defaults()["origins"]
     origins = os.environ.get("NEWSCLIP_MCP_ALLOWED_ORIGINS")
 
     return server.http_app(
@@ -740,7 +731,7 @@ def _http_app(
         allowed_hosts=_allowed_hosts() if allowed_hosts is None else allowed_hosts,
         allowed_origins=allowed_origins
         if allowed_origins is not None
-        else ([entry.strip() for entry in origins.split(",")] if origins else defaults),
+        else ([entry.strip() for entry in origins.split(",")] if origins else []),
     )
 
 
@@ -764,12 +755,9 @@ def build_http_app(
     ).strip()
 
     if os.environ.get(OPS_ENV, "").strip() == "1":
-        from .extensions import local_extensions
+        from .ops_server import build_ops_app
 
-        extension = local_extensions()
-        if extension is None:
-            raise ValueError("operator extensions are not installed")
-        return extension.build_ops_app(token)
+        return build_ops_app(token)
 
     if not token:
         raise ValueError(f"{BEARER_TOKEN_ENV} must be set")

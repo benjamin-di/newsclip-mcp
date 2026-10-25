@@ -20,10 +20,9 @@ credential budget; success clears the hold through the guard's evidence path.
 
 from __future__ import annotations
 
-import json
 import re
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager, nullcontext, suppress
+from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext, suppress
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -31,6 +30,7 @@ from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from pydantic import Field
+from signin_window.sessions import AttemptBudget
 
 from .acquisition import (
     ChallengeMode,
@@ -55,11 +55,6 @@ from .models import (
     RecoveryStatus,
     SessionHealth,
     SessionStatus,
-)
-from .private_state import (
-    PrivateStateError,
-    atomic_private_write,
-    exclusive_lock,
 )
 from .provider_check import (
     ProviderCheckFailure,
@@ -637,119 +632,28 @@ class _Sessions(Protocol):
     def provider_check(self, provider_key: str) -> ProviderCheckResult: ...
 
 
-class CredentialBudget:
-    """Records credential attempts before dispatch, never after.
-
-    An attempt that crashes mid-flight must still count. Recording only on
-    completion would let a login that dies after submitting credentials be
-    retried immediately, which is exactly the blind retry the repository
-    forbids.
-
-    Every read-modify-write runs under one exclusive lock, so two keeper
-    processes cannot each observe an unspent day and each spend it.
-    """
+class CredentialBudget(AttemptBudget):
+    """Application errors and existing ledger paths over shared accounting."""
 
     def __init__(
         self,
         root: Path,
         *,
         utc_now: Callable[[], datetime],
-        lock_timeout_seconds: float = _LOCK_TIMEOUT_SECONDS,
+        lock_timeout_seconds: float = 5,
     ) -> None:
-        self.root = root
-        self._utc_now = utc_now
-        self._lock_timeout_seconds = lock_timeout_seconds
-
-    def attempts_today(self, provider: str) -> int:
-        with self._locked(provider):
-            recorded = self._load(provider)
-        horizon = self._utc_now() - _WINDOW
-        return sum(1 for moment in recorded if moment > horizon)
-
-    def next_attempt_at(self, provider: str, *, limit: int) -> datetime | None:
-        """When the window next has room, or ``None`` if it has room now.
-
-        Read-only: unlike :meth:`reserve` it never rewrites the record.
-        """
-
-        with self._locked(provider):
-            recorded = self._load(provider)
-        horizon = self._utc_now() - _WINDOW
-        retained = sorted(moment for moment in recorded if moment > horizon)
-        if len(retained) < limit:
-            return None
-        return retained[len(retained) - limit] + _WINDOW
-
-    def reserve(self, provider: str, *, limit: int) -> bool:
-        """Claim one attempt if the day still has room, atomically.
-
-        Deciding and recording must happen under one lock. Checking the
-        day, releasing the lock, and recording afterwards lets two keepers
-        both observe the same unspent day and both spend it, which is the
-        exact overspend the budget exists to prevent.
-        """
-
-        with self._locked(provider):
-            recorded = self._load(provider)
-            horizon = self._utc_now() - _WINDOW
-            retained = [moment for moment in recorded if moment > horizon]
-            if len(retained) >= limit:
-                if retained != recorded:
-                    self._write(provider, retained)
-                return False
-            retained.append(self._utc_now())
-            self._write(provider, retained)
-            return True
-
-    @contextmanager
-    def _locked(self, provider: str) -> Iterator[None]:
-        try:
-            with exclusive_lock(
-                self._lock_path(provider),
-                timeout_seconds=self._lock_timeout_seconds,
-            ):
-                yield
-        except PrivateStateError as error:
-            raise PersistenceError("session keeper budget is unavailable") from error
-
-    def _lock_path(self, provider: str) -> Path:
-        return self._path(provider).with_suffix(".lock")
+        super().__init__(
+            root,
+            utc_now=utc_now,
+            lock_timeout_seconds=lock_timeout_seconds,
+            error_type=PersistenceError,
+            label="session keeper budget",
+        )
 
     def _path(self, provider: str) -> Path:
         if not is_provider_key(provider):
             raise PersistenceError("session keeper provider key is invalid")
         return self.root / f"{provider}.json"
-
-    def _load(self, provider: str) -> list[datetime]:
-        path = self._path(provider)
-        if path.is_symlink():
-            raise PersistenceError("session keeper budget must be a regular file")
-        try:
-            raw = path.read_bytes()
-        except FileNotFoundError:
-            return []
-        except OSError as error:
-            raise PersistenceError("session keeper budget is unreadable") from error
-        if len(raw) > _MAX_BUDGET_BYTES:
-            raise PersistenceError("session keeper budget is oversized")
-        try:
-            payload = json.loads(raw)
-            recorded = [datetime.fromisoformat(value) for value in payload["attempts"]]
-        except (ValueError, KeyError, TypeError) as error:
-            raise PersistenceError("session keeper budget is malformed") from error
-        if any(moment.tzinfo is None for moment in recorded):
-            raise PersistenceError("session keeper budget is malformed")
-        return recorded
-
-    def _write(self, provider: str, recorded: list[datetime]) -> None:
-        payload = json.dumps(
-            {"attempts": [moment.isoformat() for moment in sorted(recorded)]},
-            sort_keys=True,
-        ).encode()
-        try:
-            atomic_private_write(self._path(provider), payload)
-        except PrivateStateError as error:
-            raise PersistenceError("session keeper budget write failed") from error
 
 
 class SessionKeeper:

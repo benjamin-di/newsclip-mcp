@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from signin_window.browser import browser_environment
+
 from .events import DisplayClass, SurfaceMode
 
 DEFAULT_DISPLAY_NUMBER = 109
@@ -239,6 +241,7 @@ def _start_host_xvfb(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
+            env=browser_environment(environ),
         )
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:

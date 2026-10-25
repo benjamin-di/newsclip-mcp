@@ -114,7 +114,7 @@ def test_resolver_requires_stable_passage_clearance(
 ) -> None:
     clock = Clock()
     browser = Browser(clock)
-    monkeypatch.setattr("newsclip.challenge_resolver.time.monotonic", clock)
+    monkeypatch.setattr("signin_window.automation.resolver.time.monotonic", clock)
 
     def detector(raw_browser: object) -> ChallengeDetection:
         assert raw_browser is browser

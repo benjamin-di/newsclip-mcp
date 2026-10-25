@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-
-class SecretResolutionError(RuntimeError):
-    """A configured API key could not be resolved."""
+from signin_window.automation.secrets import (
+    SecretResolutionError as SecretResolutionError,
+)
 
 
 class ConfiguredSecretReader:
     def read(self, reference: str) -> str:
-        from .extensions import local_extensions
+        from .secret_reference import OpSecretReader
 
-        extension = local_extensions()
-        if extension is None:
-            raise SecretResolutionError("configure the provider API key")
-        return extension.resolve_api_key(reference)
+        return OpSecretReader().read(reference)

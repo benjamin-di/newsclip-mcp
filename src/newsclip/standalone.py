@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hmac
 import os
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -34,7 +36,7 @@ from .models import (
 )
 from .results import public_error
 from .service import FederatedSearchPager, NewsclipService
-from .tenancy import User, load_users, user_scope
+from .tenancy import User, load_users, require_user, user_scope
 
 
 class Payload(BaseModel):
@@ -107,7 +109,10 @@ def validate_public_url(value: str) -> str:
         or parts.query
         or parts.fragment
         or not parts.hostname
-        or parts.path.rstrip("/")
+        or (
+            parts.path.rstrip("/")
+            and re.fullmatch(r"(?:/[A-Za-z0-9_-]+)+/?", parts.path) is None
+        )
         or (
             parts.scheme != "https"
             and not (
@@ -116,7 +121,10 @@ def validate_public_url(value: str) -> str:
             )
         )
     ):
-        raise ValueError("public URL must be an HTTPS origin, or loopback HTTP")
+        raise ValueError(
+            "public URL must use HTTPS (or loopback HTTP) "
+            "with a simple optional path prefix"
+        )
     return value.rstrip("/")
 
 
@@ -125,7 +133,8 @@ class UserAuth:
 
     def __init__(self, app: Any, user: User, registry_path: Path, origin: str) -> None:
         self.app, self.user, self.registry_path = app, user, registry_path
-        self.origin, self.host = origin, urlsplit(origin).netloc
+        parts = urlsplit(origin)
+        self.origin, self.host = f"{parts.scheme}://{parts.netloc}", parts.netloc
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] == "lifespan":
@@ -182,7 +191,26 @@ class UserAuth:
                     credential = raw.decode("ascii")
                 except UnicodeDecodeError:
                     credential = ""
-        if not credential or current is None or not current.accepts(credential):
+        proxy_token = os.environ.get("NEWSCLIP_TRUSTED_PROXY_TOKEN", "")
+        proxy_header = (
+            os.environ.get("NEWSCLIP_TRUSTED_USER_HEADER", "X-Authenticated-User")
+            .lower()
+            .encode("ascii")
+        )
+        identities = [
+            value
+            for name, value in scope.get("headers", ())
+            if name.lower() == proxy_header
+        ]
+        proxy_ok = bool(
+            len(proxy_token) >= 32
+            and hmac.compare_digest(credential, proxy_token)
+            and identities == [self.user.id.encode("ascii")]
+        )
+        native_ok = (
+            not identities and current is not None and current.accepts(credential)
+        )
+        if not credential or current is None or not (native_ok or proxy_ok):
             if scope["type"] == "websocket":
                 await send({"type": "websocket.close", "code": 1008})
             else:
@@ -196,6 +224,48 @@ class UserAuth:
             return
         with user_scope(self.user.id):
             await self.app(scope, receive, send)
+
+
+class ProxyUsers:
+    """Map an edge-authenticated user's unprefixed API route to their app.
+
+    UserAuth still validates the proxy credential and selected identity. Direct
+    per-user URLs retain their native bearer checks. Sign-in links select their
+    user in the URL and do not accept a caller-controlled identity header.
+    """
+
+    def __init__(self, app, header: bytes, users: set[str]) -> None:
+        self.app, self.header, self.users = app, header, users
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in {"http", "websocket"} and (
+            scope["path"] in {"/mcp", "/mcp/"} or scope["path"].startswith("/api/")
+        ):
+            values = [
+                v for k, v in scope.get("headers", ()) if k.lower() == self.header
+            ]
+            try:
+                identifier = (
+                    require_user(values[0].decode("ascii"))
+                    if len(values) == 1
+                    else None
+                )
+            except (UnicodeDecodeError, ValueError):
+                identifier = None
+            if identifier is None or identifier not in self.users:
+                if scope["type"] == "websocket":
+                    await send({"type": "websocket.close", "code": 1008})
+                else:
+                    from starlette.responses import JSONResponse
+
+                    await JSONResponse({"detail": "Unauthorized"}, status_code=401)(
+                        scope, receive, send
+                    )
+                return
+            scope = dict(scope)
+            scope["path"] = f"/users/{identifier}{scope['path']}"
+            scope["raw_path"] = scope["path"].encode("utf-8")
+        await self.app(scope, receive, send)
 
 
 def build_standalone_app(
@@ -408,8 +478,9 @@ def build_standalone_app(
                 return JSONResponse({"detail": "Operation failed"}, status_code=500)
             return JSONResponse(value, headers={"Cache-Control": "no-store"})
 
-        host = urlsplit(origin).netloc
-        app = _http_app(server, allowed_hosts=[host], allowed_origins=[origin])
+        parts = urlsplit(origin)
+        host, browser_origin = parts.netloc, f"{parts.scheme}://{parts.netloc}"
+        app = _http_app(server, allowed_hosts=[host], allowed_origins=[browser_origin])
         app.routes.extend(relay.routes("/connect"))
         app.routes.append(Route("/api/{operation}", api, methods=["POST"]))
         applications.append((app, adapter))
@@ -433,7 +504,18 @@ def build_standalone_app(
                 adapter._service_ready().close()
 
     routes.append(Route("/health", health))
-    return Starlette(routes=routes, lifespan=lifespan)
+    application = Starlette(routes=routes, lifespan=lifespan)
+    proxy_token = os.environ.get("NEWSCLIP_TRUSTED_PROXY_TOKEN", "")
+    if proxy_token:
+        if len(proxy_token) < 32:
+            raise ValueError("trusted proxy token must contain at least 32 characters")
+        header = os.environ.get("NEWSCLIP_TRUSTED_USER_HEADER", "X-Authenticated-User")
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{0,63}", header) is None:
+            raise ValueError("trusted user header is invalid")
+        return ProxyUsers(
+            application, header.lower().encode("ascii"), {user.id for user in users}
+        )
+    return application
 
 
 def read_login_token() -> str:

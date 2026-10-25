@@ -64,7 +64,9 @@ def human_signin(
     """Open the real site; all form entry and challenges belong to the person."""
 
     from patchright.sync_api import sync_playwright
-    from signin_window.browser import LAUNCH_ARGS, harden_sync
+    from signin_window.automation.profiles import OwnedBrowserProcess
+    from signin_window.automation.runtime import close_owned_browser
+    from signin_window.browser import LAUNCH_ARGS, browser_environment, harden_sync
     from signin_window.hosts import allowed, host_resolver_rules, proxy_hosts, top_level
 
     from .composition import build_auth_service, build_registry
@@ -109,7 +111,7 @@ def human_signin(
             context = playwright.chromium.launch_persistent_context(
                 profile,
                 headless=False,
-                env=window.env(),
+                env={**browser_environment(window.env())},
                 no_viewport=True,
                 locale=auth.launch.locale,
                 timezone_id=auth.launch.timezone_id,
@@ -122,7 +124,9 @@ def human_signin(
                     + host_resolver_rules(resource_hosts, proxy_hosts()),
                 ],
             )
+            owned_process = None
             try:
+                owned_process = OwnedBrowserProcess.capture(profile)
                 harden_sync(context)
 
                 def route(request_route):
@@ -228,7 +232,12 @@ def human_signin(
                             break
                     page.wait_for_timeout(500)
             finally:
-                context.close()
+                close_owned_browser(
+                    context,
+                    playwright,
+                    owned_process,
+                    primary_failure=candidate is None,
+                )
         if candidate is not None and proof is not None:
             service_closed = True
             service.close()

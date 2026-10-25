@@ -56,7 +56,7 @@ def test_challenge_evidence_preserves_policy_and_first_surface(
 
     monkeypatch.setattr("newsclip.datadome._find_slider_geometry", geometry)
     monkeypatch.setattr(
-        "newsclip.challenge_resolver.time.monotonic", lambda: page.ticks
+        "signin_window.automation.resolver.time.monotonic", lambda: page.ticks
     )
     mechanic = DataDomeSliderMechanic(
         wall_budget_seconds=10, clock=lambda: page.ticks, sleep=lambda seconds: None

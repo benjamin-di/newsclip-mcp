@@ -10,13 +10,15 @@ import re
 import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager, suppress
+from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass, replace
-from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 from uuid import uuid4
+
+from signin_window.automation.auth import PasskeyMode as PasskeyMode
+from signin_window.automation.runtime import browser_environment, virtual_display
 
 from ..acquisition import CredentialAction
 from ..browser_readiness import (
@@ -158,13 +160,6 @@ _VIRTUAL_DISPLAY_ARGS = (
 _OBSERVATIONAL_EVALUATE_DELAYS_MS = (0, 250, 500, 1_000, 1_250)
 
 
-class PasskeyMode(StrEnum):
-    """Provider-selected behavior for an empty virtual authenticator."""
-
-    EMPTY_PRESENT = "empty_present"
-    NON_PRESENT = "non_present"
-
-
 class PatchrightMintContext:
     """Typed access to the proven Patchright page and persistent context."""
 
@@ -175,6 +170,7 @@ class PatchrightMintContext:
         *,
         trace: RuntimeTrace | None = None,
         profile_state: Literal["new", "existing", "unknown"] = "unknown",
+        display: str | None = None,
     ) -> None:
         self.context = context
         self.page = page
@@ -183,6 +179,7 @@ class PatchrightMintContext:
         self._trace = trace
         self._attempt: _AttemptState | None = None
         self._profile_state = profile_state
+        self._display = display
 
     @contextmanager
     def attempt(
@@ -601,7 +598,11 @@ class PatchrightMintContext:
         """Create a sibling page facade that retains this run's diagnostics."""
 
         sibling = PatchrightMintContext(
-            self.context, page, trace=self._trace, profile_state=self._profile_state
+            self.context,
+            page,
+            trace=self._trace,
+            profile_state=self._profile_state,
+            display=self._display,
         )
         sibling._attempt = self._attempt
         return sibling
@@ -1383,7 +1384,11 @@ class PatchrightMintContext:
         if prefer_native:
             pointer: X11Pointer | None = None
             try:
-                pointer = X11Pointer(self.page)
+                pointer = (
+                    X11Pointer(self.page, display=self._display)
+                    if self._display is not None
+                    else X11Pointer(self.page)
+                )
             except NativePointerUnavailable as error:
                 if require_native:
                     raise BrowserRuntimeError(
@@ -1496,6 +1501,19 @@ def _navigation_timeout_ms(timeout_seconds: float) -> int:
     return max(1, math.ceil(timeout_seconds * 1000))
 
 
+@dataclass
+class _IsolatedBrowserManager:
+    manager: Any
+    display_context: AbstractContextManager[str]
+    display: str | None
+
+    def stop(self) -> None:
+        try:
+            self.manager.stop()
+        finally:
+            self.display_context.__exit__(None, None, None)
+
+
 class PatchrightRuntime:
     """Create and close one persistent context; own no provider policy.
 
@@ -1594,7 +1612,7 @@ class PatchrightRuntime:
                 self.close_kept(Path(other))
 
         started = time.monotonic()
-        manager = None
+        manager: Any = None
         context = None
         browser = None
         process = None
@@ -1626,6 +1644,7 @@ class PatchrightRuntime:
                 manager, context = self._launch(
                     profile,
                     selected_launch,
+                    isolate_display=browser_mode is BrowserMode.HEADED_VIRTUAL,
                 )
                 if self._context_factory is None:
                     process = OwnedBrowserProcess.capture(profile)
@@ -1636,7 +1655,11 @@ class PatchrightRuntime:
                 page = pages[0] if pages else context.new_page()
             opened = True
             browser = PatchrightMintContext(
-                context, page, trace=self._trace, profile_state=profile_state
+                context,
+                page,
+                trace=self._trace,
+                profile_state=profile_state,
+                display=getattr(manager, "display", None),
             )
             if keep_alive:
                 self._kept[key] = _KeptContext(
@@ -1853,7 +1876,13 @@ class PatchrightRuntime:
             return
         self._trace.try_write(event)
 
-    def _launch(self, profile: Path, config: BrowserLaunchConfig):
+    def _launch(
+        self,
+        profile: Path,
+        config: BrowserLaunchConfig,
+        *,
+        isolate_display: bool = False,
+    ):
         options: dict[str, object] = {
             "user_data_dir": str(profile),
             "headless": False,
@@ -1874,8 +1903,11 @@ class PatchrightRuntime:
             return None, context
         from patchright.sync_api import sync_playwright
 
-        manager = sync_playwright().start()
+        display_context = virtual_display() if isolate_display else None
+        display = display_context.__enter__() if display_context is not None else None
+        manager: Any = None
         try:
+            manager = sync_playwright().start()
             context = manager.chromium.launch_persistent_context(
                 str(profile),
                 headless=False,
@@ -1889,10 +1921,21 @@ class PatchrightRuntime:
                 ),
                 channel=config.channel,
                 args=list(config.args) or None,
+                env={
+                    **browser_environment(),
+                    "DISPLAY": display or os.environ.get("DISPLAY", ""),
+                },
             )
-        except Exception:
-            manager.stop()
+        except BaseException:
+            try:
+                if manager is not None:
+                    manager.stop()
+            finally:
+                if display_context is not None:
+                    display_context.__exit__(None, None, None)
             raise
+        if display_context is not None:
+            manager = _IsolatedBrowserManager(manager, display_context, display)
         return manager, context
 
     @staticmethod

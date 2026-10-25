@@ -89,7 +89,7 @@ from .recovery import RecoveryStore
 from .service import NewsclipService
 from .session_keeper import CredentialBudget, KeeperPolicy, SessionKeeper
 from .sessions import ServingSessions, SessionStore
-from .tenancy import application_root, current_user, scope_path, user_scope
+from .tenancy import application_root, scope_path, user_scope
 from .timing import (
     TimingRecorder,
     TimingRunMode,
@@ -435,14 +435,12 @@ def _compose_service(
         rollback.callback(_close_after_build_failure, browser_retriever.close)
     adapters: dict[str, SessionAcquisitionAdapter] = {}
     credential_readiness_probes: dict[str, CredentialReadinessProbe] = {}
-    for key, recipe in (
-        cookie_recipes.items() if include_acquisition and current_user() is None else ()
-    ):
+    for key, recipe in cookie_recipes.items() if include_acquisition else ():
         spec = specs[key]
         if spec.auth is None:  # pragma: no cover - schema invariant
             raise RuntimeError("authenticated provider has no auth configuration")
         factory = BUILTIN_PROVIDER_REGISTRATIONS[key].build_auth_adapter
-        if factory is None:
+        if factory is None or not recipe.secret_ref:
             continue
         adapter = factory(recipe, spec, challenge_resolvers[key])
         if not isinstance(adapter, SessionAcquisitionAdapter):
@@ -684,9 +682,7 @@ def _compose_service(
         keeper_outcomes=KeeperOutcomeStore(
             state_root / "session-keeper", incident_root=state_root / "incidents"
         ),
-        recovery_store=(
-            RecoveryStore(state_root / "recovery") if current_user() is None else None
-        ),
+        recovery_store=RecoveryStore(state_root / "recovery"),
         defense=build_defense_state(),
         # Session-evidence holds clear on the verification event itself
         # (ARCHITECTURE, "Session upkeep"). Guard construction is deferred to the rare
@@ -805,13 +801,7 @@ def _application_root(environment_name: str, fallback: str) -> Path:
 
 
 def _read_path_challenge_mode() -> ChallengeMode:
-    from .extensions import local_extensions
-
-    default = (
-        ChallengeMode.AUTO
-        if local_extensions() is not None and current_user() is None
-        else ChallengeMode.DETECT_ONLY
-    )
+    default = ChallengeMode.DETECT_ONLY
     configured = os.environ.get("NEWSCLIP_CHALLENGE_MODE", default.value)
     try:
         return ChallengeMode(configured)
@@ -1079,12 +1069,3 @@ def _verification_url(spec: ProviderSpec) -> str:
         return value
     enablement = spec.enable_environment or f"the {spec.key} provider"
     raise UsageError(f"{environment_name} must be set when {enablement}=1")
-
-
-def __getattr__(name: str):
-    from .extensions import local_extensions
-
-    extension = local_extensions()
-    if extension is None:
-        raise AttributeError(name)
-    return extension.composition_attribute(name)

@@ -467,7 +467,8 @@ def test_hold_write_and_clear_fsync_the_state_directory(
 ) -> None:
     # Durability now lives in the shared private-state helper, so observe it
     # there: the invariant is that the rename itself is made durable.
-    import newsclip.private_state as private_state
+    import signin_window.state as private_state
+
     import newsclip.provider_guard as provider_guard
 
     guard, store = _guard(tmp_path)

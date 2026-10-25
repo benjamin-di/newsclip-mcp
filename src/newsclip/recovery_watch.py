@@ -150,11 +150,17 @@ class RecoveryWatch:
 
 
 def main() -> None:
-    from .composition import _application_root
     from .process_signals import exit_on_sigterm
+    from .tenancy import user_scope
 
     # Stop waits for in-flight keeper children (they get the same TERM).
     exit_on_sigterm()
+    with user_scope(os.environ.get("NEWSCLIP_USER") or None):
+        _watch_account()
+
+
+def _watch_account() -> None:
+    from .composition import _application_root
 
     providers = tuple(os.environ["NEWSCLIP_KEEPER_PROVIDERS"].split())
     watcher = RecoveryWatch(

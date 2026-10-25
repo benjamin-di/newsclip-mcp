@@ -16,8 +16,11 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from signin_window.automation.auth import AuthOutcome as _AuthOutcome
 
 from .account_keys import ACCOUNT_KEY_PATTERN
+
+MintOutcome = _AuthOutcome
 
 
 class FrozenModel(BaseModel):
@@ -32,17 +35,6 @@ class AccessState(StrEnum):
     AUTH_REQUIRED = "auth_required"
     BLOCKED = "blocked"
     UNKNOWN = "unknown"
-
-
-class MintOutcome(StrEnum):
-    VERIFIED = "verified"
-    CREDENTIAL_REJECTED = "credential_rejected"
-    SECOND_FACTOR_REQUIRED = "second_factor_required"
-    ACCOUNT_ALERT = "account_alert"
-    CHALLENGE_BLOCKED = "challenge_blocked"
-    UNKNOWN_FLOW = "unknown_flow"
-    TIMEOUT = "timeout"
-    INFRASTRUCTURE_ERROR = "infrastructure_error"
 
 
 class TerminalFailure(StrEnum):

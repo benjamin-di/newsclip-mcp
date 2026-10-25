@@ -722,7 +722,10 @@ def test_adapter_search_api_key_reference_must_use_op() -> None:
     assert spec.require_adapter_search().api_key_ref == "op://Vault/Item/credential"
 
 
-def test_adapter_search_api_key_reference_defaults_to_none() -> None:
+def test_adapter_search_api_key_reference_defaults_to_none(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("NEWSCLIP_CONFIG_HOME", str(tmp_path / "empty-config"))
     for key in ("cnbc", "reuters", "bloomberg"):
         spec = ProviderSpec.model_validate(_payload(key))
         assert spec.require_adapter_search().api_key_ref is None

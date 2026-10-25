@@ -14,6 +14,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 
+from signin_window.state import read_private_file
+
 from .private_state import atomic_private_write, exclusive_lock
 
 _USER = re.compile(r"[a-z][a-z0-9_-]{0,47}\Z")
@@ -62,10 +64,10 @@ def scope_path(root: Path) -> Path:
 @dataclass(frozen=True)
 class User:
     id: str
-    token_sha256: str
+    token_sha256: str | None
 
     def accepts(self, token: str) -> bool:
-        return hmac.compare_digest(
+        return self.token_sha256 is not None and hmac.compare_digest(
             self.token_sha256, hashlib.sha256(token.encode()).hexdigest()
         )
 
@@ -73,9 +75,7 @@ class User:
 def load_users(path: Path) -> tuple[User, ...]:
     """Load a fail-closed, bounded registry. Tokens never appear in it."""
 
-    if path.stat().st_size > 1024 * 1024:
-        raise ValueError("user registry is too large")
-    data = json.loads(path.read_text())
+    data = json.loads(read_private_file(path, max_bytes=1024 * 1024))
     if (
         not isinstance(data, dict)
         or data.get("version") != 1
@@ -91,12 +91,38 @@ def load_users(path: Path) -> tuple[User, ...]:
             raise ValueError("invalid user registry entry")
         identifier = require_user(row["id"])
         digest = row["token_sha256"]
-        if not isinstance(digest, str) or re.fullmatch(r"[a-f0-9]{64}", digest) is None:
+        if digest is not None and (
+            not isinstance(digest, str) or re.fullmatch(r"[a-f0-9]{64}", digest) is None
+        ):
             raise ValueError("invalid token hash")
-        if any(user.id == identifier or user.token_sha256 == digest for user in users):
+        if any(
+            user.id == identifier
+            or (digest is not None and user.token_sha256 == digest)
+            for user in users
+        ):
             raise ValueError("duplicate user or token")
         users.append(User(identifier, digest))
     return tuple(users)
+
+
+def add_proxy_user(path: Path, identifier: str) -> None:
+    """Register a trusted-proxy identity with no native bearer credential."""
+
+    identifier = require_user(identifier)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with exclusive_lock(path.with_suffix(".lock"), timeout_seconds=10):
+        users = list(load_users(path)) if path.exists() else []
+        if any(user.id == identifier for user in users):
+            raise ValueError("user exists")
+        if len(users) >= 100:
+            raise ValueError("at most 100 users are supported")
+        users.append(User(identifier, None))
+        atomic_private_write(
+            path,
+            json.dumps(
+                {"version": 1, "users": [vars(user) for user in users]}
+            ).encode(),
+        )
 
 
 def add_user(

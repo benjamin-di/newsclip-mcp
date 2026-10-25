@@ -60,6 +60,8 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             test "$GITHUB_REF_NAME" = "v$version"
           fi
+          fingerprint="$(uv run --locked --no-dev python scripts/print_source_fingerprint.py)"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "candidate=candidate-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
       - name: Build standalone server candidate
@@ -74,6 +76,7 @@ jobs:
           build-args: |
             VCS_REF=${{ github.sha }}
             IMAGE_VERSION=${{ steps.version.outputs.version }}
+            BUILD_SOURCE_FINGERPRINT=${{ steps.version.outputs.fingerprint }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha,scope=newsclip
@@ -90,6 +93,7 @@ jobs:
           build-args: |
             VCS_REF=${{ github.sha }}
             IMAGE_VERSION=${{ steps.version.outputs.version }}
+            BUILD_SOURCE_FINGERPRINT=${{ steps.version.outputs.fingerprint }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha,scope=newsclip
@@ -103,6 +107,9 @@ jobs:
           docker pull "$LOGIN_IMAGE"
           docker run --rm --init --network none --read-only --tmpfs /tmp:rw,exec,mode=1777,size=1g \
             -v "$PWD/scripts/smoke_standalone.py:/acceptance.py:ro" \
+            --entrypoint python "$SERVER_IMAGE" /acceptance.py
+          timeout 120 docker run --rm --init --network none --read-only --tmpfs /tmp:rw,exec,mode=1777,size=1g --shm-size=256m \
+            -v "$PWD/scripts/smoke_browser_isolation.py:/acceptance.py:ro" \
             --entrypoint python "$SERVER_IMAGE" /acceptance.py
           timeout 300 docker run --rm --init --network none --read-only --tmpfs /tmp:rw,exec,mode=1777,size=1g --shm-size=256m \
             -v "$PWD/scripts/standalone_e2e.py:/acceptance.py:ro" \

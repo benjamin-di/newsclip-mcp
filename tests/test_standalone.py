@@ -27,7 +27,7 @@ from newsclip.models import (  # noqa: E402
 )
 from newsclip.sessions import SessionStore  # noqa: E402
 from newsclip.standalone import build_standalone_app  # noqa: E402
-from newsclip.tenancy import add_user, load_users  # noqa: E402
+from newsclip.tenancy import add_proxy_user, add_user, load_users  # noqa: E402
 
 NOW = datetime(2026, 10, 25, tzinfo=UTC)
 
@@ -66,6 +66,8 @@ def test_product_composition_isolates_complete_state(monkeypatch, tmp_path):
         assert bob._archive.path == tmp_path / "data/users/bob/archive.sqlite3"
         assert alice._sessions._store.root == tmp_path / "state/users/alice"
         assert bob._sessions._store.root == tmp_path / "state/users/bob"
+        assert alice._recovery_store.root == tmp_path / "state/users/alice/recovery"
+        assert bob._recovery_store.root == tmp_path / "state/users/bob/recovery"
     finally:
         alice.close()
         bob.close()
@@ -308,3 +310,108 @@ def test_failed_or_stale_manual_signin_preserves_verified_generation(tmp_path):
     with pytest.raises(OperatorActionRequiredError, match="changed"):
         store.promote_browser_session(replacement, proof, expected_generation=None)
     assert store.get_valid_session("fixture").generation_id == candidate.generation_id
+
+
+def test_proxy_identity_is_bound_to_dedicated_credential(
+    accounts, tmp_path, monkeypatch
+):
+    proxy = "synthetic-proxy-secret-at-least-32-characters"
+    monkeypatch.setenv("NEWSCLIP_TRUSTED_PROXY_TOKEN", proxy)
+    monkeypatch.setenv("NEWSCLIP_TRUSTED_USER_HEADER", "X-Authenticated-User")
+    add_proxy_user(accounts[0], "carol")
+    app, tokens, _ = make_app(accounts, tmp_path)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        good = {"Authorization": f"Bearer {proxy}", "X-Authenticated-User": "alice"}
+        assert client.post("/api/providers", json={}, headers=good).status_code == 200
+        proxy_only = {**good, "X-Authenticated-User": "carol"}
+        assert (
+            client.post("/api/providers", json={}, headers=proxy_only).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                "/users/carol/api/providers",
+                json={},
+                headers={"Authorization": f"Bearer {proxy}"},
+            ).status_code
+            == 401
+        )
+        for headers in (
+            {"Authorization": f"Bearer {proxy}"},
+            {"X-Authenticated-User": "alice"},
+            {**good, "Authorization": f"Bearer {tokens['alice']}"},
+            {**good, "X-Authenticated-User": "unknown"},
+            {**good, "X-Authenticated-User": "../bob"},
+        ):
+            assert (
+                client.post("/api/providers", json={}, headers=headers).status_code
+                == 401
+            )
+        assert (
+            client.post("/users/bob/api/providers", json={}, headers=good).status_code
+            == 401
+        )
+        duplicate = [
+            ("Authorization", f"Bearer {proxy}"),
+            ("X-Authenticated-User", "alice"),
+            ("X-Authenticated-User", "bob"),
+        ]
+        assert (
+            client.post("/api/providers", json={}, headers=duplicate).status_code == 401
+        )
+        # Native tokens remain bound to their explicit URL, with no proxy header.
+        assert (
+            client.post(
+                "/users/alice/api/providers",
+                json={},
+                headers={"Authorization": f"Bearer {tokens['alice']}"},
+            ).status_code
+            == 200
+        )
+
+
+def test_public_prefix_is_used_in_links_and_origin_is_bare(accounts, tmp_path):
+    registry, tokens = accounts
+    app = build_standalone_app(
+        users_path=registry,
+        public_url="https://reader.example.com/newsclip",
+        login_token="synthetic-internal-token-at-least-32-characters",
+        service_factory=lambda user: _service(tmp_path / user, ConnectProvider()),
+        backend_factory=Backend,
+    )
+    with TestClient(app, base_url="https://reader.example.com") as client:
+        headers = {
+            "Authorization": f"Bearer {tokens['alice']}",
+            "Origin": "https://reader.example.com",
+        }
+        response = client.post(
+            "/users/alice/api/connect", json={"provider": "fixture"}, headers=headers
+        )
+        assert response.status_code == 200
+        assert response.json()["result"]["url"].startswith(
+            "https://reader.example.com/newsclip/users/alice/connect/"
+        )
+        headers["Origin"] += "/newsclip"
+        assert (
+            client.post(
+                "/users/alice/api/providers", json={}, headers=headers
+            ).status_code
+            == 403
+        )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/../other",
+        "https://example.com/a//b",
+        "https://example.com/%2e%2e",
+        "https://example.com/prefix?secret=x",
+        "https://user:pass@example.com/prefix",
+    ],
+)
+def test_unsafe_public_prefixes_are_refused(url):
+    from newsclip.standalone import validate_public_url
+
+    with pytest.raises(ValueError):
+        validate_public_url(url)

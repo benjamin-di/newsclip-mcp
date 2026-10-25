@@ -6,6 +6,14 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+# Public compatibility imports; these checks do not read credentials.
+from .credential_readiness import (
+    check_credential_readiness as check_credential_readiness,
+)
+from .credential_readiness import (
+    vision_auth_available as vision_auth_available,
+)
+
 if TYPE_CHECKING:
     from patchright.sync_api import PlaywrightContextManager
 
@@ -43,12 +51,3 @@ def native_input_available() -> bool:
         return ctypes.util.find_library("Xtst") is not None
     except Exception:  # noqa: BLE001 - absence is the only answer that matters
         return False
-
-
-def __getattr__(name: str):
-    from .extensions import local_extensions
-
-    extension = local_extensions()
-    if extension is None:
-        raise AttributeError(name)
-    return extension.readiness_attribute(name)

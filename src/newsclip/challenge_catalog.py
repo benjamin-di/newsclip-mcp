@@ -14,17 +14,19 @@ from .challenges import (
 )
 from .cloudflare_interstitial import CloudflareInterstitialMechanic
 from .datadome import DataDomeSliderMechanic
-from .extensions import local_extensions
+from .maintenance import vision_planner
 from .perimeterx import PerimeterXHoldMechanic
 
 MechanicFactory = Callable[[], ChallengeMechanic]
 
 
 def _hcaptcha() -> ChallengeMechanic:
-    extension = local_extensions()
-    if extension is not None:
-        return extension.hcaptcha_mechanic()
-    return HumanChallenge()
+    planner = vision_planner()
+    if planner is None:
+        return HumanChallenge()
+    from signin_window.automation.hcaptcha import HCaptchaVisualMechanic
+
+    return HCaptchaVisualMechanic(planner=planner)
 
 
 class HumanChallenge:

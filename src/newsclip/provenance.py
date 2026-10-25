@@ -27,11 +27,7 @@ _MANIFEST_FILES = frozenset(
 
 
 def _manifest_files() -> frozenset[str]:
-    from .extensions import local_extensions
-
-    extension = local_extensions()
-    extras = () if extension is None else extension.manifest_files()
-    return _MANIFEST_FILES | frozenset(extras)
+    return _MANIFEST_FILES
 
 
 class SourceIdentityError(RuntimeError):
@@ -200,7 +196,7 @@ def _behavior_paths(repository: Path) -> tuple[Path, ...]:
         path.relative_to(repository)
         for path in (repository / "src/newsclip").rglob("*.py")
     }
-    for definitions in ("provider_definitions", "identity_definitions"):
+    for definitions in ("provider_definitions",):
         candidates.update(
             path.relative_to(repository)
             for path in (repository / "src/newsclip" / definitions).glob("*.toml")
@@ -284,7 +280,6 @@ def _git_pathspecs() -> tuple[str, ...]:
         "src/newsclip/*.py",
         "src/newsclip/**/*.py",
         "src/newsclip/provider_definitions/*.toml",
-        "src/newsclip/identity_definitions/*.toml",
         *_manifest_files(),
     )
 

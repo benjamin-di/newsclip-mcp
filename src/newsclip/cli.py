@@ -99,7 +99,7 @@ from .results import (
 )
 from .service import FederatedSearchPager, NewsclipService, _ordered_search_batch
 from .session_keeper import KeeperPolicy, KeeperResult
-from .tenancy import add_user, user_scope
+from .tenancy import add_proxy_user, add_user, user_scope
 
 Service = NewsclipService | NewsclipClient
 _CLIENT: ContextVar[NewsclipClient | None] = ContextVar(
@@ -379,6 +379,22 @@ def users_add(
         f"User {name} configured. Token written to {token_file}. "
         "Restart the server after adding users."
     )
+
+
+@users_app.command("add-proxy")
+def users_add_proxy(
+    name: Annotated[str, typer.Argument(help="A lowercase trusted-proxy user id.")],
+    config: Annotated[
+        Path, typer.Option("--config", help="Server user registry path.")
+    ],
+) -> None:
+    """Register a proxy identity without creating a native bearer credential."""
+
+    try:
+        add_proxy_user(config.expanduser(), name)
+    except (OSError, ValueError) as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(f"Proxy user {name} configured. Restart the server after adding users.")
 
 
 @app.command("serve")
@@ -1920,23 +1936,6 @@ def _render_fleet_health(fleet: FleetHealth) -> None:
                 error.value for error in entry.state_errors
             )
         typer.echo(line)
-    for identity in fleet.identities:
-        line = f"{identity.target.upper():<10} identity"
-        if identity.state_error is not None:
-            typer.echo(f"{line} state_errors={identity.state_error}")
-            continue
-        status = identity.status or {}
-        hold = status.get("hold") or {}
-        line += f" generation={status.get('last_generation')}"
-        line += f" snapshot_age_s={status.get('snapshot_age_s')}"
-        line += " stale=yes" if status.get("stale") else " stale=no"
-        if hold:
-            line += f" hold={hold.get('reason')} ({hold.get('hold_id')})"
-        if status.get("cooldown"):
-            line += f" cooldown_until={status['cooldown'].get('until')}"
-        if status.get("next_sign_in_at"):
-            line += f" next_sign_in_at={status['next_sign_in_at']}"
-        typer.echo(line)
 
 
 def _render_keeper_result(result: KeeperResult) -> None:
@@ -2491,17 +2490,6 @@ def _fail(
         error=error,
     )
     raise typer.Exit(code=envelope.exit_code)
-
-
-def _register_local_commands() -> None:
-    from .extensions import local_extensions
-
-    extension = local_extensions()
-    if extension is not None:
-        extension.configure_cli(app)
-
-
-_register_local_commands()
 
 
 def run() -> None:

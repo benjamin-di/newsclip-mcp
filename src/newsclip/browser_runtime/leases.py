@@ -1,166 +1,52 @@
-"""Ranked process-safe leases for session, attempt, and durable profiles."""
+"""Application lease naming and timing over shared process-safe locks."""
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
-import math
-import os
-import stat
-import threading
-import time
-from collections.abc import Iterator
-from contextlib import contextmanager, nullcontext, suppress
-from enum import IntEnum
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
+
+from signin_window.leases import (
+    HeldProfileLease as _HeldProfileLease,
+)
+from signin_window.leases import (
+    LeaseBusyError as LeaseBusyError,
+)
+from signin_window.leases import (
+    LeaseKind as LeaseKind,
+)
+from signin_window.leases import (
+    LockOrderError as LockOrderError,
+)
+from signin_window.leases import (
+    ordered_file_lease as _ordered_file_lease,
+)
 
 from ..account_keys import require_account_key
 from ..provider_keys import is_provider_key
 from ..timing import TimingStep, timing_step
 
 
-class LeaseKind(IntEnum):
-    SESSION_GENERATION = 10
-    PROVIDER_ATTEMPT = 20
-    DURABLE_PROFILE = 30
-
-
-_LEASE_TIMING_STEPS = {
-    LeaseKind.PROVIDER_ATTEMPT: TimingStep.ATTEMPT_LEASE_WAIT,
-    LeaseKind.DURABLE_PROFILE: TimingStep.PROFILE_LEASE_WAIT,
-}
-
-
-class LeaseBusyError(TimeoutError):
-    """A lease could not be acquired within its bounded wait."""
-
-
-class LockOrderError(RuntimeError):
-    """A caller attempted to acquire leases out of canonical order."""
-
-
-_STATE = threading.local()
-
-
-def _stack() -> list[LeaseKind]:
-    stack = getattr(_STATE, "lease_stack", None)
-    if stack is None:
-        stack = []
-        _STATE.lease_stack = stack
-    return stack
-
-
-def _private_directory(path: Path) -> None:
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(path, 0o700)
-
-
 @contextmanager
-def ordered_file_lease(
-    path: Path,
-    *,
-    kind: LeaseKind,
-    timeout_seconds: float = 30,
-) -> Iterator[None]:
-    """Acquire one regular, non-symlink lock file at the requested rank."""
-
-    timeout = float(timeout_seconds)
-    if not math.isfinite(timeout) or timeout < 0:
-        raise ValueError("invalid lease timeout")
-    held = _stack()
-    if held and kind <= held[-1]:
-        raise LockOrderError("lease order must be session -> attempt -> profile")
-
-    path = Path(path)
-    _private_directory(path.parent)
-    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags, stat.S_IRUSR | stat.S_IWUSR)
-    acquired = False
+def ordered_file_lease(path, *, kind, timeout_seconds=30):
+    step = {
+        LeaseKind.PROVIDER_ATTEMPT: TimingStep.ATTEMPT_LEASE_WAIT,
+        LeaseKind.DURABLE_PROFILE: TimingStep.PROFILE_LEASE_WAIT,
+    }.get(kind)
+    # Acquisition timing closes before the caller's protected work starts.
+    lease = _ordered_file_lease(path, kind=kind, timeout_seconds=timeout_seconds)
+    with timing_step(step) if step is not None else nullcontext():
+        lease.__enter__()
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise OSError("lease target is not a regular file")
-        os.fchmod(descriptor, 0o600)
-        step = _LEASE_TIMING_STEPS.get(kind)
-        with timing_step(step) if step is not None else nullcontext():
-            deadline = time.monotonic() + timeout
-            while True:
-                try:
-                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    acquired = True
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise LeaseBusyError("lease acquisition timed out") from None
-                    time.sleep(min(0.1, max(0.001, timeout / 10)))
-        held.append(kind)
-        try:
-            yield
-        finally:
-            released = held.pop()
-            if released is not kind:
-                raise LockOrderError("lease release order was corrupted")
+        yield
     finally:
-        if acquired:
-            with suppress(OSError):
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
+        lease.__exit__(None, None, None)
 
 
-class HeldProfileLease:
-    """Exclusive profile flock held across multiple browser retrievals.
-
-    Unlike :func:`ordered_file_lease`, this does not remain on the thread-local
-    lease stack after acquisition — keep-alive browsers hold the lock for their
-    full lifetime. Owners must release it before acquiring a lower-ranked
-    session or attempt lease.
-    """
-
-    def __init__(self, path: Path, *, timeout_seconds: float = 30) -> None:
-        timeout = float(timeout_seconds)
-        if not math.isfinite(timeout) or timeout < 0:
-            raise ValueError("invalid lease timeout")
-        held = _stack()
-        if held and held[-1] >= LeaseKind.DURABLE_PROFILE:
-            raise LockOrderError("lease order must be session -> attempt -> profile")
-        path = Path(path)
-        _private_directory(path.parent)
-        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
-        flags |= getattr(os, "O_NOFOLLOW", 0)
-        self._descriptor = os.open(path, flags, stat.S_IRUSR | stat.S_IWUSR)
-        self._acquired = False
-        try:
-            if not stat.S_ISREG(os.fstat(self._descriptor).st_mode):
-                raise OSError("lease target is not a regular file")
-            os.fchmod(self._descriptor, 0o600)
-            with timing_step(TimingStep.PROFILE_LEASE_WAIT):
-                deadline = time.monotonic() + timeout
-                while True:
-                    try:
-                        fcntl.flock(self._descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        self._acquired = True
-                        break
-                    except BlockingIOError:
-                        if time.monotonic() >= deadline:
-                            raise LeaseBusyError(
-                                "lease acquisition timed out"
-                            ) from None
-                        time.sleep(min(0.1, max(0.001, timeout / 10)))
-        except BaseException:
-            os.close(self._descriptor)
-            raise
-
-    def release(self) -> None:
-        descriptor = self._descriptor
-        if descriptor < 0:
-            return
-        self._descriptor = -1
-        if self._acquired:
-            with suppress(OSError):
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-            self._acquired = False
-        with suppress(OSError):
-            os.close(descriptor)
+class HeldProfileLease(_HeldProfileLease):
+    def __init__(self, path, *, timeout_seconds=30):
+        with timing_step(TimingStep.PROFILE_LEASE_WAIT):
+            super().__init__(path, timeout_seconds=timeout_seconds)
 
 
 class LeaseManager:

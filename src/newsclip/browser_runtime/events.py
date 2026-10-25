@@ -20,6 +20,24 @@ from typing import Annotated, Literal
 from uuid import uuid4
 
 from pydantic import AwareDatetime, Field, TypeAdapter, model_validator
+from signin_window.automation.auth import AuthEvidenceFamily as AuthEvidenceFamily
+from signin_window.automation.auth import AuthPhase as AuthPhase
+from signin_window.automation.auth import IdentityExitReason as IdentityExitReason
+from signin_window.automation.auth import RouteClass as RouteClass
+from signin_window.automation.events import (
+    HCaptchaAttemptTerminalReason as HCaptchaAttemptTerminalReason,
+)
+from signin_window.automation.events import HCaptchaPlanKind as HCaptchaPlanKind
+from signin_window.automation.events import HCaptchaPromptFamily as HCaptchaPromptFamily
+from signin_window.automation.events import (
+    HCaptchaSurfaceMissBucket as HCaptchaSurfaceMissBucket,
+)
+from signin_window.automation.events import (
+    HCaptchaTerminalReason as HCaptchaTerminalReason,
+)
+from signin_window.automation.events import (
+    HCaptchaVendorOutcome as HCaptchaVendorOutcome,
+)
 
 from ..acquisition import CredentialAction
 from ..browser_readiness import (
@@ -85,60 +103,6 @@ class BrowserFailureCategory(StrEnum):
     UNCLASSIFIED = "unclassified"
 
 
-class HCaptchaPromptFamily(StrEnum):
-    LINE = "line"
-    SHAPE = "shape"
-    PATTERN = "pattern"
-    SEMANTIC_GRID = "semantic_grid"
-    ANIMAL_COUNT = "animal_count"
-    MOTION = "motion"
-    DRAG = "drag"
-    OTHER = "other"
-
-
-class HCaptchaPlanKind(StrEnum):
-    GRID = "grid"
-    POINT = "point"
-    DRAG = "drag"
-    PASS = "pass"
-
-
-class HCaptchaVendorOutcome(StrEnum):
-    NOT_OBSERVED = "not_observed"
-    ACCEPTED = "accepted"
-    REJECTED = "rejected"
-
-
-class HCaptchaTerminalReason(StrEnum):
-    NATIVE_ACCEPTED = "native_accepted"
-    PLANNER_DECLINED = "planner_declined"
-    CORRECTIVE_REPEAT = "corrective_repeat"
-    UNCHANGED_AFTER_CORRECTION = "unchanged_after_correction"
-    ROUND_BUDGET_EXHAUSTED = "round_budget_exhausted"
-    STALE_PLAN = "stale_plan"
-    WALL_BUDGET_EXHAUSTED = "wall_budget_exhausted"
-
-
-class HCaptchaAttemptTerminalReason(StrEnum):
-    TASK_IDENTITY_UNAVAILABLE = "task_identity_unavailable"
-    ACCEPTED = "accepted"
-    PLANNER_DECLINED = "planner_declined"
-    PLANNER_FAILED = "planner_failed"
-    ACTION_FAILED = "action_failed"
-    SURFACE_MISSING = "surface_missing"
-    WALL_BUDGET_EXHAUSTED = "wall_budget_exhausted"
-    ROUND_BUDGET_EXHAUSTED = "round_budget_exhausted"
-    UNCHANGED_AFTER_CORRECTION = "unchanged_after_correction"
-    STALE_PLAN = "stale_plan"
-
-
-class HCaptchaSurfaceMissBucket(StrEnum):
-    NONE = "none"
-    ONE = "one"
-    TWO = "two"
-    THREE_OR_MORE = "three_or_more"
-
-
 class IdentityHandoffCheckpoint(StrEnum):
     IDENTITY_RETURN = "identity_return"
     IDENTITY_ERROR = "identity_error"
@@ -159,22 +123,6 @@ class IdentityPageState(StrEnum):
     OPEN = "open"
     CLOSED = "closed"
     UNAVAILABLE = "unavailable"
-
-
-class IdentityExitReason(StrEnum):
-    """Why an identity flow stopped, which its other facts cannot express.
-
-    A page that closed on its own and one whose context was destroyed both
-    report ``identity_page_closed``, yet only the second is an ambiguous
-    post-submit state. ``DECLINED`` belongs to a cached-callback replay that
-    refused to proceed rather than resubmit a credential; the credential flow
-    itself never exits that way.
-    """
-
-    CALLBACK_COMPLETE = "callback_complete"
-    IDENTITY_PAGE_CLOSED = "identity_page_closed"
-    IDENTITY_CONTEXT_CLOSED = "identity_context_closed"
-    DECLINED = "declined"
 
 
 class PaidProbeOutcome(StrEnum):
@@ -271,41 +219,11 @@ class AttemptOutcome(StrEnum):
     TIMEOUT = "timeout"
 
 
-class AuthPhase(StrEnum):
-    PROFILE = "profile"
-    ENTRY = "entry"
-    USERNAME = "username"
-    PASSWORD = "password"
-    CHALLENGE = "challenge"
-    CALLBACK = "callback"
-    VERIFICATION = "verification"
-    UNKNOWN = "unknown"
-
-
-class AuthEvidenceFamily(StrEnum):
-    NONE = "none"
-    SELECTOR = "selector"
-    TEXT = "text"
-    PATH = "path"
-    HOST_CLASS = "host_class"
-    COOKIE_PRESENCE = "cookie_presence"
-    CALLBACK_STATUS = "callback_status"
-    ASSESSMENT = "assessment"
-
-
 class ControlCardinality(StrEnum):
     NOT_CHECKED = "not_checked"
     ABSENT = "absent"
     SINGLE = "single"
     MULTIPLE = "multiple"
-
-
-class RouteClass(StrEnum):
-    PUBLISHER_AUTH = "publisher_auth"
-    PUBLISHER_CONTENT = "publisher_content"
-    KNOWN_IDP = "known_idp"
-    KNOWN_CHALLENGE_VENDOR = "known_challenge_vendor"
-    OTHER = "other"
 
 
 class ActionResult(StrEnum):

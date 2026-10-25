@@ -91,10 +91,7 @@ def serving(tmp_path, monkeypatch):
         "for_provider",
         lambda self, key, **kwargs: NoBrowser(),
     )
-    from newsclip.extensions import local_extensions
-
-    if local_extensions() is not None:
-        monkeypatch.setattr("newsclip.login.OpSecretFiller.__init__", forbidden)
+    monkeypatch.setattr("newsclip.login.OpSecretFiller.__init__", forbidden)
     monkeypatch.setattr(SessionStore, "explicit_login", forbidden)
     service = composition.build_mcp_service()
     assert isinstance(service._sessions, ServingSessions)

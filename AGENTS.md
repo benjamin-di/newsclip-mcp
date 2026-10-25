@@ -15,8 +15,11 @@ agent instruction file; do not add CLAUDE.md or GEMINI.md.
   cookies, screenshots, incidents or profiles into a test or issue.
 - Preserve complete user isolation across authorization, sessions, profiles,
   archive, exports, diagnostics and asynchronous callbacks.
-- Sign-in is driven by the person through signin-window. Reader tools cannot
-  collect credentials or automate credential submission.
+- Human sign-in uses signin-window and never automates credential submission.
+  Reader tools cannot collect credentials. Optional operator maintenance uses
+  explicit account-scoped references, bounded budgets and separate credentials.
+  Generic session/challenge mechanics belong in signin-window; news entitlement
+  and recovery policy belong here.
 - A successful sign-in is not proof of entitlement to an arbitrary article.
   Preserve provider assessment and atomic verified-session publication.
 - Keep provider drift local. Shared fixes require a shared reproducer.

@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+from functools import partial
+
 from ..challenges import ChallengeVendor
-from ..extensions import local_extensions
+from ..credential_readiness import check_credential_readiness
 from .ap import build_ap_provider
 from .axios import build_axios_provider
 from .bloomberg import build_bloomberg_provider
+from .bloomberg_auth import build_bloomberg_auth_adapter
 from .cnbc import build_cnbc_provider
 from .economist import build_economist_provider
+from .economist_auth import build_economist_auth_adapter
 from .ft import build_ft_provider
+from .ft_auth import build_ft_auth_adapter
 from .guardian import build_guardian_provider
 from .nyt import build_nyt_provider
-from .registration import BuiltinProviderRegistration
+from .nyt_auth import build_nyt_auth_adapter
+from .registration import AuthAdapterFactory, BuiltinProviderRegistration
 from .reuters import build_reuters_provider
 from .wsj import build_wsj_provider
+from .wsj_auth import build_wsj_auth_adapter
 
 BUILTIN_PROVIDER_REGISTRATIONS = {
     "ft": BuiltinProviderRegistration(
@@ -65,10 +73,25 @@ BUILTIN_PROVIDER_REGISTRATIONS = {
 }
 
 
-_extension = local_extensions()
-if _extension is not None:
-    BUILTIN_PROVIDER_REGISTRATIONS = _extension.configure_providers(
-        BUILTIN_PROVIDER_REGISTRATIONS
+# Registration is inert. Only the credential-bearing maintenance composition
+# constructs these adapters; reader services cannot dispatch acquisition.
+_AUTH_FACTORIES: dict[str, AuthAdapterFactory] = {
+    "ft": build_ft_auth_adapter,
+    "wsj": build_wsj_auth_adapter,
+    "bloomberg": build_bloomberg_auth_adapter,
+    "economist": build_economist_auth_adapter,
+    "nyt": build_nyt_auth_adapter,
+}
+for _key, _factory in _AUTH_FACTORIES.items():
+    BUILTIN_PROVIDER_REGISTRATIONS[_key] = replace(
+        BUILTIN_PROVIDER_REGISTRATIONS[_key],
+        build_auth_adapter=_factory,
+        check_credential_readiness=partial(
+            check_credential_readiness,
+            _key,
+            require_vision=_key == "ft",
+            require_native_input=_key == "bloomberg",
+        ),
     )
 
 BUILTIN_PROVIDER_KEYS = tuple(BUILTIN_PROVIDER_REGISTRATIONS)
