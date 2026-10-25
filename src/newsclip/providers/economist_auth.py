@@ -40,7 +40,7 @@ from ..browser_verification import MainDocumentResponse, capture_verification_fe
 from ..challenge_resolver import ChallengeResolution, ChallengeResolver
 from ..challenges import ChallengeInfrastructureError
 from ..contracts import AuthBrowserSession, LoginRecipe, SecretFiller
-from ..login import LoginInfrastructureError, OpSecretFiller
+from ..login import LoginInfrastructureError, credential_filler
 from ..models import FrozenModel, MintOutcome, RawFetch, SessionArtifact
 from ..provider_config import ProviderSpec, load_provider_spec, validate_auth_surface
 from ..session_cookies import (
@@ -107,7 +107,7 @@ class EconomistAcquisitionAdapter:
                 }
             )
         )
-        self._secrets = secrets or OpSecretFiller()
+        self._secrets = secrets or credential_filler()
         self._challenge_resolver = challenge_resolver
         self._clock = clock or (lambda: datetime.now(UTC))
         self._observation_phase = AuthPhase.ENTRY

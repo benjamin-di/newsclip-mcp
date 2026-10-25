@@ -264,7 +264,7 @@ def test_failed_secret_delivery_never_uses_another_identity(monkeypatch) -> None
 
     monkeypatch.setattr("newsclip.secret_reference.subprocess.run", failed)
     filler = OpSecretFiller(service_account_token="TOKEN_SENTINEL")
-    with pytest.raises(LoginInfrastructureError, match="field resolution failed"):
+    with pytest.raises(LoginInfrastructureError, match="resolution failed"):
         filler.fill(
             browser,
             secret_ref="op://Example/Item",

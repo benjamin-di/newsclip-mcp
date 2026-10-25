@@ -498,8 +498,11 @@ class SessionSpec(FrozenModel):
             raise ValueError("cookie domains must be lowercase hostnames")
         if len(set(self.allowed_cookie_domains)) != len(self.allowed_cookie_domains):
             raise ValueError("cookie domains must be unique")
-        if self.secret_ref and not self.secret_ref.startswith("op://"):
-            raise ValueError("session secret reference must use op://")
+        if self.secret_ref and (
+            len(self.secret_ref) > 2048
+            or any(c in self.secret_ref for c in ("\r", "\n", "\x00", "{", "}"))
+        ):
+            raise ValueError("session secret reference is invalid")
         if any(
             not prefix.strip() or prefix != prefix.lower()
             for prefix in self.session_cookie_name_prefixes

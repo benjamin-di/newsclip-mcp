@@ -150,3 +150,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes
+
+  pypi:
+    needs: [released, github-release]
+    if: >-
+      always() && vars.PYPI_PUBLISH == 'true' && github.ref_type == 'tag' &&
+      (needs.github-release.result == 'success' || needs.released.outputs.done == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+      - name: Download and verify the tested public release distributions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          test "$TAG" = "v$version"
+          gh api "repos/$REPOSITORY/releases/tags/$TAG" > release.json
+          gh release download "$TAG" --repo "$REPOSITORY" --dir dist --pattern '*.whl' --pattern '*.tar.gz'
+          python3 scripts/check_release_distributions.py release.json dist "$version"
+          uv tool run --from twine twine check --strict dist/*
+          uv run --no-project --with "./dist/newsclip-$version-py3-none-any.whl" newsclip --version
+      - name: Publish with short-lived identity and attestations
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086
+        with:
+          attestations: true
+          skip-existing: true

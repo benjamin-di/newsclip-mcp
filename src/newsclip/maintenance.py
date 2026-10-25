@@ -19,7 +19,7 @@ from .tenancy import application_root
 
 class ProviderSettings(FrozenModel):
     credential_reference: str | None = Field(
-        default=None, pattern=r"^op://[^/\r\n{}]+/[^/\r\n{}]+$"
+        default=None, min_length=1, max_length=2048, pattern=r"^[^\r\n\x00{}]+$"
     )
     api_key_reference: str | None = None
 
@@ -75,3 +75,8 @@ def vision_planner():
     if not callable(getattr(planner, "plan", None)):
         raise ValueError("configured vision planner must implement plan")
     return planner
+
+
+def credential_reader_factory() -> str:
+    """Only an explicitly configured backend may replace the default adapter."""
+    return os.environ.get("NEWSCLIP_CREDENTIAL_READER", "").strip()

@@ -448,6 +448,7 @@ class SearchResponse(FrozenModel):
 
 
 class LoginRequirement(StrEnum):
+    CREDENTIAL_READER = "credential_reader"
     MAIL_GATEWAY = "mail_gateway"
     OP_CLI = "op_cli"
     OP_SERVICE_TOKEN = "op_service_token"

@@ -434,6 +434,52 @@ def signin_service(
     run_signin_service(host=host, port=port)
 
 
+@app.command("maintenance-cycle")
+def maintenance_cycle(
+    providers: str = typer.Option(
+        ..., "--providers", help="Space-separated provider keys."
+    ),
+    mode: str = typer.Option("keep", "--mode", help="keep or check"),
+    timeout_seconds: int = typer.Option(900, "--timeout-seconds", min=1, max=86400),
+    max_age_hours: float = typer.Option(12, "--max-age-hours", min=0.0001, max=8760),
+    check_interval_seconds: int = typer.Option(
+        86400, "--check-interval-seconds", min=60
+    ),
+    allow_credential_mint: bool = typer.Option(False, "--allow-credential-mint"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Run one bounded local upkeep or scheduled provider-check cycle."""
+    from .maintenance_cycle import run_maintenance_cycle
+    from .tenancy import application_root
+
+    completed = []
+
+    def action():
+        if _remote_client() is not None:
+            raise UsageError("run maintenance locally on the server")
+        if mode not in {"keep", "check"}:
+            raise UsageError("maintenance mode must be keep or check")
+        result = run_maintenance_cycle(
+            providers.split(),
+            root=application_root("NEWSCLIP_STATE_HOME", ".local/state"),
+            mode=mode,
+            timeout=timeout_seconds,
+            max_age_hours=max_age_hours,
+            check_interval=check_interval_seconds,
+            allow_credential_mint=allow_credential_mint,
+        )
+        completed.append(result)
+        return result
+
+    _execute(
+        action,
+        json_output=json_output,
+        human_renderer=lambda r: typer.echo(json.dumps(r.public_dict())),
+    )
+    if completed and completed[0].needs_attention:
+        raise typer.Exit(code=1)
+
+
 @auth_app.command("keep")
 def auth_keep(
     provider: ProviderArgument,

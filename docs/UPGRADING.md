@@ -1,5 +1,14 @@
 # Upgrading
 
+## 0.9: supported maintenance integrations
+
+Install signin-window 0.4.4 or newer within its 0.4 compatibility range. The
+public maintenance-cycle command replaces installation-specific provider loops.
+Credential-reader factories are optional; existing 1Password configuration stays
+valid. Profiles, archives, session records, holds, budgets and check reservations
+retain their formats and locations. No state migration or acknowledgment is needed.
+
+
 ## 0.8
 
 Human sign-in, native bearer users, archive schemas and published session formats

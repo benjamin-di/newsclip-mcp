@@ -9,7 +9,6 @@ from patchright.sync_api import Page, sync_playwright
 
 from newsclip.challenge_catalog import build_challenge_resolver
 from newsclip.challenge_detection import (
-    _NATIVE_PREFILTER_SELECTOR,
     detect_challenge,
     detect_challenge_for_reads,
 )
@@ -603,7 +602,7 @@ class _CountingBrowser:
 
     def locator(self, selector: str) -> _CountingLocator:
         self.locator_selectors.append(selector)
-        if selector == _NATIVE_PREFILTER_SELECTOR:
+        if len(self.locator_selectors) == 1:
             return _CountingLocator(self._prefilter_count)
         return _CountingLocator(0)
 

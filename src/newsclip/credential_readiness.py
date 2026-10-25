@@ -9,7 +9,9 @@ from pathlib import Path
 from shutil import which
 from typing import TYPE_CHECKING, cast
 
-from .maintenance import planner_configured
+from signin_window.automation.secrets import load_credential_reader
+
+from .maintenance import credential_reader_factory, planner_configured
 from .models import LoginRequirement, ProviderReadiness
 from .vision_cli import VisionProvider, vision_environment
 
@@ -98,10 +100,18 @@ def check_credential_readiness(
     """
 
     missing: list[LoginRequirement] = []
-    if which("op") is None:
-        missing.append(LoginRequirement.OP_CLI)
-    if not os.environ.get("OP_SERVICE_ACCOUNT_TOKEN", "").strip():
-        missing.append(LoginRequirement.OP_SERVICE_TOKEN)
+    selected_reader = credential_reader_factory()
+    if selected_reader:
+        try:
+            if not load_credential_reader(selected_reader).available:
+                missing.append(LoginRequirement.CREDENTIAL_READER)
+        except Exception:
+            missing.append(LoginRequirement.CREDENTIAL_READER)
+    else:
+        if which("op") is None:
+            missing.append(LoginRequirement.OP_CLI)
+        if not os.environ.get("OP_SERVICE_ACCOUNT_TOKEN", "").strip():
+            missing.append(LoginRequirement.OP_SERVICE_TOKEN)
     if require_vision and (
         not planner_configured() or os.environ.get("NEWSCLIP_VISION_PLANNER") == "local"
     ):

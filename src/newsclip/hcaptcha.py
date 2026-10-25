@@ -1,21 +1,30 @@
 """Application defaults around shared hCaptcha mechanics."""
 
+from signin_window.automation.hcaptcha import (
+    ChallengeActionBoundary as _ActionBoundary,
+)
+from signin_window.automation.hcaptcha import (
+    HCaptchaOutcomeObserver as _HCaptchaOutcomeObserver,
+)
 from signin_window.automation.hcaptcha import HCaptchaVisualMechanic as _Mechanic
 from signin_window.automation.hcaptcha import (
     PromptFamily as PromptFamily,
 )
 from signin_window.automation.hcaptcha import (
-    _ActionBoundary as _ActionBoundary,
-)
-from signin_window.automation.hcaptcha import (
-    _hcaptcha_instruction as _hcaptcha_instruction,
-)
-from signin_window.automation.hcaptcha import (
-    _HCaptchaOutcomeObserver as _HCaptchaOutcomeObserver,
-)
-from signin_window.automation.hcaptcha import (
     classify_prompt_family as classify_prompt_family,
 )
+from signin_window.automation.hcaptcha import (
+    hcaptcha_instruction as _hcaptcha_instruction,
+)
+
+__all__ = [
+    "HCaptchaVisualMechanic",
+    "PromptFamily",
+    "classify_prompt_family",
+    "_ActionBoundary",
+    "_HCaptchaOutcomeObserver",
+    "_hcaptcha_instruction",
+]
 
 from .vision_planning import LocalCliVisionPlanner
 

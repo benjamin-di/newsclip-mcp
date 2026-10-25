@@ -50,7 +50,7 @@ from ..challenges import (
     ChallengeVendor,
 )
 from ..contracts import AuthBrowserSession, LoginRecipe, SecretFiller
-from ..login import LoginInfrastructureError, OpSecretFiller
+from ..login import LoginInfrastructureError, credential_filler
 from ..models import FrozenModel, MintOutcome, SessionArtifact
 from ..provider_config import (
     ProviderDefinitionError,
@@ -403,7 +403,7 @@ class FTAcquisitionAdapter:
         self._session_cookie_prefixes = session.session_cookie_name_prefixes
         self._observe_script = build_auth_observation_script(self._auth.observations)
         self._token_probe_script = build_ft_native_token_probe_script(selected_spec)
-        self._secrets = secrets or OpSecretFiller()
+        self._secrets = secrets or credential_filler()
         self._challenge_resolver = challenge_resolver
         self._clock = clock or (lambda: datetime.now(UTC))
 

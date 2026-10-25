@@ -57,7 +57,7 @@ from ..identity.google import (
     GoogleIdentityObservation,
     GoogleIdentityResult,
 )
-from ..login import LoginInfrastructureError, OpSecretFiller
+from ..login import LoginInfrastructureError, credential_filler
 from ..models import AccessState, MintOutcome, RawFetch, SessionArtifact
 from ..provider_config import ProviderSpec, load_provider_spec, validate_auth_surface
 from ..session_cookies import (
@@ -218,7 +218,7 @@ class BloombergAcquisitionAdapter:
             raise ValueError(
                 "Bloomberg authentication requires semantic browser readiness"
             )
-        selected_secrets = secrets or OpSecretFiller()
+        selected_secrets = secrets or credential_filler()
         self._recipe = recipe
         self._auth = auth
         self._cookie_domains = session.allowed_cookie_domains

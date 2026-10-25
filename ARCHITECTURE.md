@@ -62,9 +62,27 @@ evidence and an extraction revision in SQLite; Markdown is a derived export.
 Re-extraction reads stored bytes, and archive search does not contact providers.
 Backups use SQLite's consistent backup path rather than copying live WAL files.
 
-## Installation-specific integrations
+## Optional account maintenance
 
-The core has a small optional integration boundary for installations maintaining
-additional operator capabilities. The standalone distribution contains no such
-integration, deployment accounts or credential automation. Provider session
-verification remains usable without an automated acquisition adapter.
+The public package contains provider session maintenance and recovery policy.
+`newsclip maintenance-cycle` coordinates bounded `auth keep` or scheduled
+`provider-guard` work and returns a versioned, closed result. Each provider
+retains its existing attempt budgets and holds. The provider-check reservation
+is persisted before requests and survives restarts. A failed provider does not
+prevent checking the others. Callers supply scheduling and notification delivery.
+
+Generic browser, challenge and durable-state mechanisms come from signin-window.
+Applications use its supported public APIs. Human windows remain independent of
+credential automation. Readers have no maintenance authority simply because the
+code is installed; the operator must separately supply credentials and grants.
+
+The default credential adapter is 1Password. `NEWSCLIP_CREDENTIAL_READER` can
+explicitly select an operator-installed `module:factory` implementing
+signin-window's `CredentialReader`. References are opaque to Newsclip. A selected
+backend failure never falls back to ambient 1Password credentials. The configured
+planner factory is an independent integration point. Site identity, entitlement,
+FULL article assessment and atomic session publication remain Newsclip policy.
+
+Account references, credentials, runtime profiles, schedules, alert destinations
+and installation-specific planner transports stay outside the public release.
+Private deployments consume the accepted public images without a product fork.

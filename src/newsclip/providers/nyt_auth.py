@@ -40,7 +40,7 @@ from ..challenge_resolver import (
 )
 from ..challenges import ChallengeInfrastructureError
 from ..contracts import AuthBrowserSession, LoginRecipe, SecretFiller
-from ..login import LoginInfrastructureError, OpSecretFiller
+from ..login import LoginInfrastructureError, credential_filler
 from ..models import FrozenModel, MintOutcome, PortableCookie, RawFetch, SessionArtifact
 from ..provider_config import ProviderSpec, load_provider_spec, validate_auth_surface
 from ..session_cookies import (
@@ -123,7 +123,7 @@ class NYTAcquisitionAdapter:
         )
         self._cookie_domains = session.allowed_cookie_domains
         self._observe_script = build_auth_observation_script(self._auth.observations)
-        self._secrets = secrets or OpSecretFiller()
+        self._secrets = secrets or credential_filler()
         self._challenge_resolver = challenge_resolver
         self._clock = clock or (lambda: datetime.now(UTC))
 

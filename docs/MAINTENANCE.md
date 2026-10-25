@@ -131,3 +131,38 @@ its recovery store and CLI children use that account's scope. Configure
 `NEWSCLIP_KEEPER_PROVIDERS`, credential permission and timeouts explicitly before
 running `python -m newsclip.recovery_watch`. Its polling reads local recovery
 records; a healthy provider causes no watcher-initiated request.
+
+## Bounded maintenance cycles
+
+Run one account-scoped cycle with the public command:
+
+```sh
+newsclip --user alice maintenance-cycle --providers 'ft wsj' --json
+newsclip --user alice maintenance-cycle --mode check --providers 'ft wsj guardian' --json
+```
+
+Credential submission remains disabled unless `--allow-credential-mint` is given.
+Each child has a timeout; provider failures do not skip the next provider. The
+JSON document has `schema_version`, `mode`, `ran`, `needs_attention` and `results`.
+An active check reservation returns `ran: false` without contacting a provider.
+The existing `provider-monitor-next-run-at` ASCII file is retained unchanged;
+malformed or unreadable scheduling state fails closed. A cycle lease passes to
+child processes, so an interrupted caller cannot overlap a surviving child.
+
+Python supervisors may call `maintenance_cycle.run_maintenance_cycle` and provide
+an `on_start` callback for their own notification transport. The result separates
+automatic waiting from operator attention. Alert destinations and escalation
+preferences belong to the deployment.
+
+## Credential backends
+
+Set `NEWSCLIP_CREDENTIAL_READER=example_backend:create_reader` to select an
+explicit trusted backend implementing signin-window's `CredentialReader`
+(`available: bool`, `read_field(reference, *, field) -> str`). The factory and
+availability check must be inert: they do not fetch credentials or contact a
+publisher. Put an opaque reference in the existing per-user maintenance file.
+The backend resolves only the requested username, password or generated TOTP.
+Without this setting, existing `op://` references use 1Password unchanged.
+A custom backend does not require the `op` executable or service-account token.
+Origin checks and error redaction apply to every backend, and a failed selected
+backend never falls back to another credential identity.

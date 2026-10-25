@@ -38,3 +38,46 @@ def test_invalid_configuration_fails_closed(tmp_path, monkeypatch):
     path.write_text('{"version":2,"providers":{}}')
     with pytest.raises(ValueError):
         load_provider_spec("ft")
+
+
+def test_custom_credential_backend_accepts_opaque_reference_without_op(
+    tmp_path, monkeypatch
+):
+    import sys
+    from types import ModuleType
+
+    from signin_window.automation.secret_filler import CredentialFiller
+    from signin_window.automation.secrets import SecretResolutionError
+
+    from newsclip.credential_readiness import check_credential_readiness
+    from newsclip.login import credential_filler
+
+    class Reader:
+        available = True
+
+        def read_field(self, *args, **kwargs):
+            pytest.fail("availability must not resolve a credential")
+
+    module = ModuleType("example_backend")
+    module.create = Reader
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    monkeypatch.setenv("NEWSCLIP_CREDENTIAL_READER", "example_backend:create")
+    monkeypatch.delenv("OP_SERVICE_ACCOUNT_TOKEN", raising=False)
+    monkeypatch.setenv("NEWSCLIP_CONFIG_HOME", str(tmp_path))
+    (tmp_path / "maintenance.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "providers": {"ft": {"credential_reference": "example:account"}},
+            }
+        )
+    )
+    assert load_provider_spec("ft").session.secret_ref == "example:account"
+    assert check_credential_readiness("ft").missing == ()
+    assert isinstance(credential_filler(), CredentialFiller)
+    monkeypatch.setenv("NEWSCLIP_CREDENTIAL_READER", "absent_backend:create")
+    assert any(
+        x.value == "credential_reader" for x in check_credential_readiness("ft").missing
+    )
+    with pytest.raises(SecretResolutionError):
+        credential_filler()
