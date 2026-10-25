@@ -1,0 +1,46 @@
+schema_version = 1
+key = "reuters"
+order = 50
+enabled_by_default = true
+
+[capabilities]
+requires_session_for_retrieve = false
+requires_session_for_search = false
+session_kind = "none"
+retrieval_transport = "http"
+search_transport = "http"
+http_impersonate = "safari2601"
+retrieval_challenge_escalation = "browser"
+
+[rate_budget]
+requests_per_second = 12.0
+burst = 12
+
+[identity]
+allowed_hosts = ["reuters.com", "www.reuters.com"]
+canonical_host = "www.reuters.com"
+path_pattern = "^/(?P<id>(?!(?:arc|video|pictures|authors)(?:/|$))(?:[a-z0-9-]+/)+[a-z0-9][a-z0-9-]*-[0-9]{4}-[0-9]{2}-[0-9]{2})$"
+canonical_path = "/{id}"
+lowercase_groups = ["id"]
+
+[search]
+kind = "adapter"
+endpoint = "https://www.reuters.com/arc/outboundfeeds/news-sitemap/"
+
+[check]
+query = "Why oil prices haven't gone crazy despite 5 months of US-Iran war"
+canonical_url = "https://www.reuters.com/business/energy/why-oil-prices-havent-gone-crazy-despite-5-months-us-iran-war-2026-07-20"
+require_canonical_result = false
+
+[extraction]
+scope_xpath = ["//article"]
+
+[assessment]
+canonical_signal = "canonical_article_url"
+article_xpath = ["//article"]
+required_signals = ["newsarticle_jsonld", "jsonld_headline", "article_body_structure", "markdown_body", "extracted_headline"]
+
+[[assessment.negative_rules]]
+kind = "challenge"
+xpath_any = ["//script[contains(@src, 'captcha-delivery.com')]", "//script[contains(., \"'host':'geo.captcha-delivery.com'\")]"]
+text_any = ["please enable js and disable any ad blocker"]

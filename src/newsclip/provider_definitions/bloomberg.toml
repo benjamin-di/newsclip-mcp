@@ -1,0 +1,278 @@
+schema_version = 1
+key = "bloomberg"
+order = 30
+enabled_by_default = true
+
+[capabilities]
+requires_session_for_retrieve = true
+requires_session_for_search = true
+session_kind = "cookie"
+retrieval_transport = "browser"
+# JSON search API accepts the portable cookie jar over HTTP; browser is only
+# required for full article HTML.
+search_transport = "http"
+
+[browser_retrieval]
+# Warm path skips fixed settle/idle tax; recovery still walks owned-host
+# affinity URLs when a portable cookie jar must reseed an empty profile.
+warmup_urls = []
+recovery_warmup_urls = [
+  "https://www.bloomberg.com/",
+  "https://www.bloomberg.com/account/profile",
+  "https://www.bloomberg.com/subscriptions",
+  "https://www.bloomberg.com/",
+]
+warmup_settle_seconds = 0
+article_settle_seconds = 0
+network_idle_timeout_seconds = 0
+# domcontentloaded (default) is faster and more reliable for FULL than
+# commit+selector waits on Bloomberg's ad-heavy shell.
+navigation_wait_until = "domcontentloaded"
+ready_selectors = []
+ready_timeout_seconds = 0
+# Stylesheets are decorative for trafilatura body extraction; skipping them
+# trims first-article navigation enough to keep warm save under 2s even when
+# Chromium still pays process launch (cold browser open + nav).
+block_resource_types = ["image", "media", "font", "stylesheet"]
+
+[browser_retrieval.semantic_readiness]
+# Re-evaluate the same rendered document with Bloomberg's production
+# extraction/assessment contract. This is not a navigation retry: a timeout
+# returns the latest snapshot for the normal fail-closed final assessment.
+timeout_seconds = 3
+stable_seconds = 0.25
+poll_seconds = 0.1
+
+[rate_budget]
+# Parallel search pages plus the warm browser save that follows share one
+# bucket; keep burst above the first-window page fan-out so discovery does not
+# self-queue into the article path.
+requests_per_second = 8.0
+burst = 10
+
+[identity]
+allowed_hosts = ["www.bloomberg.com"]
+canonical_host = "www.bloomberg.com"
+path_pattern = "^/news/(?:articles|features)/(?P<published>[0-9]{4}-[0-9]{2}-[0-9]{2})/(?P<id>[^/]+)$"
+lowercase_groups = ["id"]
+
+[search]
+kind = "adapter"
+endpoint = "https://www.bloomberg.com/nemo-next/api/search/query"
+
+[check]
+query = "Moonshot winners losers AI trade"
+canonical_url = "https://www.bloomberg.com/news/articles/2026-07-20/moonshot-ai-is-creating-new-winners-and-losers-in-the-ai-trade"
+# Nemo search ranks by recency over relevance: this article answered the query
+# through 2026-08-07 and had fallen out of the first window by 2026-08-23,
+# which held the canary at expected_result_missing for two weeks while the
+# article itself still served. Same posture as reuters/ap: a non-empty search
+# page proves the search leg; retrieval of canonical_url proves serving.
+require_canonical_result = false
+
+[assessment]
+canonical_signal = "canonical_article_url"
+article_xpath = ["//article"]
+page_headline_xpath = ["//h1[normalize-space()]"]
+record_jsonld_state = true
+required_signals = ["article_body_structure", "markdown_body", "extracted_headline"]
+metadata_alternatives = [["newsarticle_jsonld", "jsonld_headline"], ["jsonld_absent", "page_headline"], ["jsonld_non_article", "page_headline"]]
+minimum_words = 250
+# Payload floor, and a backstop rather than the guard that holds the line.
+# The rendered floor above separates a paywall teaser from a full article by
+# size, because size is all a partial DOM offers. The embedded payload arrives
+# whole or not at all, and identity, HTTP status, the session cookie, the
+# challenge check and the strict component parse have already run before this
+# floor is reached, so it only has to reject a thin stub.
+#
+# Anything this floor newly admits is by construction an article the rendered
+# floor rejected, which routes it through a live session probe before it can be
+# promoted; a relaxed payload floor therefore cannot admit an unverified body.
+# 250 rejected a complete 205-word wire story. 120 is a reasoned round number,
+# not a measured one: the local corpus holds ten payloads whose minimum is that
+# same 205-word article, so nothing calibrates the 120-205 band.
+story_minimum_words = 120
+
+[assessment.paragraph_floor]
+root_xpath = "//article"
+paragraph_xpath = ".//p"
+preferred_root_xpath = ".//h1[normalize-space()]"
+minimum_count = 4
+minimum_substantial_count = 2
+substantial_minimum_characters = 80
+
+[[assessment.negative_rules]]
+kind = "challenge"
+xpath_any = ["//*[@id='px-captcha']", "//*[@data-visible-challenge='true']"]
+text_any = ["are you a robot", "press and hold", "verify you are human", "unusual activity from your computer network", "perimeterx"]
+
+[[assessment.negative_rules]]
+kind = "authentication"
+final_url_hosts = ["accounts.google.com"]
+final_urls = ["https://www.bloomberg.com/account/signin"]
+xpath_any = ["//form[contains(@action, '/account/signin')]"]
+
+[[assessment.negative_rules]]
+kind = "paywall"
+xpath_any = ["//*[@data-subscription-required]", "//*[@data-page='paywall']"]
+text_any = ["subscribe to continue reading"]
+
+[session]
+candidate_verification_mode = "browser_paid_probe"
+allowed_origins = ["https://www.bloomberg.com", "https://accounts.google.com"]
+allowed_cookie_domains = ["bloomberg.com"]
+default_verification_url = "https://www.bloomberg.com/news/articles/2026-07-17/wheat-eases-as-traders-lock-in-gains-assess-black-sea-threats"
+
+[auth]
+login_url = "https://www.bloomberg.com/account/signin"
+auth_path_prefixes = ["/account/signin", "/account/login"]
+identity_hosts = ["accounts.google.com"]
+post_callback_urls = [
+  "https://www.bloomberg.com/",
+  "https://www.bloomberg.com/account/profile",
+  "https://www.bloomberg.com/subscriptions",
+]
+
+[auth.launch]
+locale = "en-GB"
+timezone_id = "Europe/London"
+accept_language = "en-GB,en;q=0.9"
+args = ["--disable-features=WebAuthentication,WebAuthenticationPasskeysUI,WebAuthCable,WebAuthnConditionalUI"]
+
+[auth.controls]
+google_continue = ["button:has-text('Continue with Google')", "a:has-text('Continue with Google')", "[data-provider='google']"]
+cookie_accept = [
+  "[role='dialog']:has-text('Your Privacy and Preferences Regarding Cookies') button:has-text('Accept All')",
+  "[aria-modal='true']:has-text('Your Privacy and Preferences Regarding Cookies') button:has-text('Accept All')",
+  "body:has-text('Your Privacy and Preferences Regarding Cookies') button:has-text('Accept All')",
+]
+terms_accept = [
+  "[role='dialog']:has-text(\"We've updated our terms\") button:has-text('Accept')",
+  "[aria-modal='true']:has-text(\"We've updated our terms\") button:has-text('Accept')",
+  "div:has(> h2:has-text(\"We've updated our terms\")) button:has-text('Accept')",
+  "div:has(> h3:has-text(\"We've updated our terms\")) button:has-text('Accept')",
+]
+use_another = ["div[role='link']:has-text('Use another account')", "li:has-text('Use another account')", "text=Use another account"]
+account_choices = ["[data-identifier]", "div[data-email]", "li div[role='link']", "div[role='link']"]
+email = ["#identifierId", "input[name='identifier']", "input[autocomplete='username']"]
+password = ["input[name='Passwd']", "input[type='password']", "input[autocomplete='current-password']"]
+totp = ["input[name='totpPin']", "#totpPin", "input[autocomplete='one-time-code']", "input[type='tel']"]
+email_submit = [
+  "form:has(#identifierId) button[type='submit']",
+  "form:has(input[name='identifier']) button[type='submit']",
+  "#identifierNext",
+  "button:has-text('Next')",
+  "div[role='button']:has-text('Next')",
+]
+password_submit = [
+  "form:has(input[name='Passwd']) button[type='submit']",
+  "form:has(input[type='password']) button[type='submit']",
+  "#passwordNext",
+  "button:has-text('Next')",
+  "div[role='button']:has-text('Next')",
+]
+totp_submit = [
+  "form:has(input[name='totpPin']) button[type='submit']",
+  "form:has(#totpPin) button[type='submit']",
+  "form:has(input[autocomplete='one-time-code']) button[type='submit']",
+  "#totpNext",
+  "button:has-text('Next')",
+  "div[role='button']:has-text('Next')",
+]
+alternate = ["button:has-text('Try another way')", "div[role='button']:has-text('Try another way')", "span:has-text('Try another way')", "div[role='link']:has-text('Try another way')", "[data-action='secondaryaction']:has-text('Try another way')", "a:has-text('Try another way')", "button:has-text('More ways to verify')", "div[role='button']:has-text('More ways to verify')", "button:has-text('Other options')"]
+password_choice = ["button:has-text('Enter your password')", "div[role='link']:has-text('Enter your password')", "div[role='button']:has-text('Enter your password')", "li:has-text('Enter your password')", "div[role='button']:has-text('Use your password')", "li:has-text('Use your password')", "div[data-challengeid]:has-text('password')", "[data-challengeid='5']"]
+totp_choice = [
+  "div[role='link']:has-text('Google Authenticator')",
+  "div[role='button']:has-text('Google Authenticator')",
+  "li:has-text('Google Authenticator')",
+  "div[role='link']:has-text('Authenticator')",
+  "div[role='button']:has-text('Authenticator')",
+  "li:has-text('Authenticator')",
+  "div[role='link']:has-text('authenticator app')",
+  "div[role='button']:has-text('authenticator app')",
+  "li:has-text('authenticator app')",
+  "div[role='link']:has-text('Get a verification code')",
+  "div[role='button']:has-text('Get a verification code')",
+  "li:has-text('Get a verification code')",
+  "div[role='link']:has-text('verification code')",
+  "div[role='button']:has-text('verification code')",
+  "li:has-text('verification code')",
+  # Current Google "Verify it's you" method list uses this offline-code wording
+  # for the Authenticator/app code path (not SMS, not phone-tap).
+  "div[role='link']:has-text('phone or tablet to get a security code')",
+  "div[role='button']:has-text('phone or tablet to get a security code')",
+  "li:has-text('phone or tablet to get a security code')",
+  "div[role='link']:has-text('get a security code')",
+  "div[role='button']:has-text('get a security code')",
+  "li:has-text('get a security code')",
+  "div[role='link']:has-text('security code')",
+  "div[role='button']:has-text('security code')",
+  "li:has-text('security code')",
+  "[data-challengeid='6']",
+  "[data-challengetype='6']",
+  "div[data-challengeid='6']",
+  "div[jsname]:has-text('Authenticator')",
+]
+consent = ["button:has-text('Continue')", "button:has-text('Allow')", "button:has-text('Confirm')"]
+
+[auth.observations.email_visible]
+any_selectors = ["#identifierId", "input[name='identifier']", "input[autocomplete='username']"]
+absent_selectors = ["input[name='Passwd']", "input[type='password']", "input[autocomplete='current-password']"]
+
+[auth.observations.password_visible]
+any_selectors = ["input[name='Passwd']", "input[type='password']", "input[autocomplete='current-password']"]
+
+[auth.observations.totp_visible]
+any_selectors = ["input[name='totpPin']", "#totpPin", "input[autocomplete='one-time-code']"]
+
+[auth.observations.account_chooser]
+any_path_contains = ["accountchooser"]
+any_text = ["use another account"]
+
+[auth.observations.alternate_visible]
+any_text = ["try another way", "more ways to verify"]
+
+[auth.observations.password_choice]
+any_text = ["enter your password", "use your password"]
+
+[auth.observations.totp_choice]
+any_text = [
+  "google authenticator",
+  "authenticator app",
+  "get a verification code",
+  "from the google authenticator",
+  "authentication app",
+  # Modern multi-method chooser heading/rows for offline Authenticator codes.
+  "choose a way to verify",
+  "phone or tablet to get a security code",
+  "get a security code",
+  "security code",
+  "even if it's offline",
+  "even if it is offline",
+]
+
+[auth.observations.consent_visible]
+any_selectors = ["button"]
+required_text = ["continue", "allow", "confirm"]
+absent_selectors = ["#identifierId", "input[name='identifier']", "input[name='Passwd']", "input[type='password']", "input[name='totpPin']", "#totpPin", "input[autocomplete='one-time-code']"]
+# Passkey prompts also expose a Continue button without credential fields.
+# They are handled via alternate_visible / unsupported_second_factor, not GIS
+# consent. Keep consent narrowly for OAuth allow screens only.
+
+[auth.observations.credential_rejected]
+any_text = ["wrong password", "couldn't find your google account", "wrong code"]
+
+[auth.observations.account_alert]
+any_text = ["account disabled", "suspicious activity"]
+
+[auth.observations.unsupported_second_factor]
+# These markers describe individual unsupported methods. A multi-method
+# "choose a way to verify" page may list them beside Authenticator; the
+# adapter only fails closed when no supported totp/password/alternate path
+# is also observed.
+any_text = [
+  "tap yes on your phone",
+  "get a verification code by text",
+  "use your passkey",
+  "fingerprint, face, or screen lock",
+]

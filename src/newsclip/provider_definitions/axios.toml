@@ -1,0 +1,57 @@
+schema_version = 1
+key = "axios"
+order = 100
+enabled_by_default = true
+
+[capabilities]
+requires_session_for_retrieve = false
+requires_session_for_search = false
+session_kind = "none"
+retrieval_transport = "http"
+search_transport = "http"
+
+[rate_budget]
+requests_per_second = 1.0
+burst = 1
+
+[identity]
+allowed_hosts = ["axios.com", "www.axios.com"]
+canonical_host = "www.axios.com"
+path_pattern = "^/(?P<id>(?:local/[a-z0-9]+(?:-[a-z0-9]+)*/)?[0-9]{4}/[0-9]{2}/[0-9]{2}/[a-z0-9]+(?:-[a-z0-9]+)*)$"
+canonical_path = "/{id}"
+lowercase_groups = ["id"]
+
+# Recent headline/URL discovery, not full-text or historical site search.
+[search]
+kind = "adapter"
+endpoint = "https://www.axios.com/sitemaps/news.xml"
+
+[check]
+query = "trump congress energy prices city government"
+canonical_url = "https://www.axios.com/2026/09/06/chris-wright-gas-prices-labor-day"
+require_canonical_result = false
+allow_empty_search = true
+
+[extraction]
+scope_xpath = ["//*[@data-cy='story-body']"]
+
+[assessment]
+canonical_signal = "canonical_article_url"
+article_xpath = ["//*[@data-cy='story-body']"]
+required_signals = ["newsarticle_jsonld", "jsonld_headline", "article_body_structure", "markdown_body", "extracted_headline"]
+
+# Retained HTTP403 on 2026-09-07. A mention of Cloudflare is not a challenge.
+[[assessment.negative_rules]]
+kind = "challenge"
+xpath_any = ["//html[head/title[normalize-space()='Just a moment...'] and .//script[contains(@src, '/cdn-cgi/challenge-platform/') or contains(., '/cdn-cgi/challenge-platform/')]]"]
+
+# Empty Piano mounts and the generic gated-content class also occur on public
+# stories. Only an active/populated gate is negative evidence. Public access
+# is additionally checked against the identity-matching story payload.
+[[assessment.negative_rules]]
+kind = "paywall"
+xpath_any = [
+  "//*[@id='piano-container'][@data-piano-active or * or normalize-space()]",
+  "//*[@id='paywall-fallback-container' or @id='piano-spinner']",
+  "//*[@data-cy='story-body']//*[contains(concat(' ', normalize-space(@class), ' '), ' gated-content ')][@hidden or @aria-hidden='true' or contains(translate(@style, ' ', ''), 'display:none')]",
+]

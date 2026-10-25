@@ -1,0 +1,90 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "newsclip"
+version = "0.7.0"
+description = "News search, verified subscription reading and private archiving"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "benjamin-di"}]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "click>=8.4,<9",
+  "curl-cffi>=0.16.3,<1",
+  "lxml>=5,<7",
+  "httpx>=0.28,<1",
+  "patchright>=1.52,<2",
+  "pydantic>=2.11,<3",
+  "rich>=14,<15",
+  "trafilatura>=2,<3",
+  "typer>=0.16,<1",
+]
+
+[project.optional-dependencies]
+# Compatibility alias: browser login dependencies are now installed by default.
+login = []
+signin = ["signin-window>=0.3.0,<0.4", "uvicorn>=0.34,<1"]
+mcp = [
+    "anyio>=4.8,<5",
+    # FastMCP 4 (MCP SDK 2): the SDK's own mcp.server.fastmcp is gone in v2.
+    "fastmcp>=4.0.10,<5",
+    "starlette>=1.0.1,<2",
+    "uvicorn>=0.34,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/benjamin-di/newsclip-mcp"
+Documentation = "https://github.com/benjamin-di/newsclip-mcp#readme"
+Issues = "https://github.com/benjamin-di/newsclip-mcp/issues"
+
+[project.scripts]
+newsclip = "newsclip.cli:run"
+
+[dependency-groups]
+dev = [
+  "mypy>=1.18,<2",
+  "pytest>=8.4,<9",
+  "ruff>=0.12,<1",
+]
+transport-lab = [
+  "playwright>=1.61,<2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/newsclip"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+# bench/ holds the provider-neutral transport probe; `bench` imports from the root.
+testpaths = ["tests", "bench"]
+pythonpath = ["."]
+markers = [
+  "live: requires credentials and real provider network access",
+]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "newsclip.runtime_projection"
+check_untyped_defs = true
+disallow_any_generics = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_decorators = true
+no_implicit_reexport = true
+strict_equality = true
+warn_return_any = true
+warn_unused_ignores = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

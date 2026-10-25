@@ -1,0 +1,121 @@
+schema_version = 1
+key = "nyt"
+order = 70
+enabled_by_default = true
+
+[capabilities]
+requires_session_for_retrieve = true
+requires_session_for_search = false
+session_kind = "cookie"
+retrieval_transport = "browser"
+search_transport = "browser"
+
+[browser_retrieval]
+warmup_urls = []
+recovery_warmup_urls = ["https://www.nytimes.com/"]
+warmup_settle_seconds = 0
+article_settle_seconds = 0
+network_idle_timeout_seconds = 0
+navigation_wait_until = "commit"
+ready_selectors = ["article#story", "[data-testid='headline']", "section[name='articleBody']"]
+ready_timeout_seconds = 3
+
+[browser_retrieval.semantic_readiness]
+timeout_seconds = 8
+stable_seconds = 0.5
+poll_seconds = 0.1
+
+[rate_budget]
+requests_per_second = 5.0
+burst = 5
+
+[identity]
+allowed_hosts = ["nytimes.com", "www.nytimes.com"]
+canonical_host = "www.nytimes.com"
+path_pattern = "^/(?P<id>(?:interactive/)?(?P<published>[0-9]{4}/[0-9]{2}/[0-9]{2})/[a-z0-9-]+(?:/[a-z0-9-]+)?/[a-z0-9][a-z0-9-]*\\.html)$"
+lowercase_groups = ["id"]
+
+[search]
+kind = "html"
+endpoint = "https://www.nytimes.com/search"
+query_parameter = "query"
+result_xpath = ["//*[@data-testid='search-results']//*[@data-testid='search-bodega-result']//a[@href]", "//*[@data-testid='search-results']//a[@href]"]
+empty_result_xpath = ["//*[@data-testid='search-results']"]
+published_date_identity_group = "published"
+published_date_format = "%Y/%m/%d"
+
+[check]
+query = "Fed pick faces skepticism over claim of independence from Trump"
+canonical_url = "https://www.nytimes.com/2026/04/21/business/kevin-warsh-fed-chair-hearing-trump-independence.html"
+
+[assessment]
+canonical_signal = "canonical_article_url"
+article_xpath = ["//article[@id='story']", "//article//section[@name='articleBody']", "//article"]
+page_headline_xpath = ["//h1[@data-testid='headline'][normalize-space()]", "//article//h1[normalize-space()]"]
+record_jsonld_state = true
+required_signals = ["article_body_structure", "markdown_body", "extracted_headline"]
+metadata_alternatives = [["newsarticle_jsonld", "jsonld_headline"], ["jsonld_absent", "page_headline"], ["jsonld_non_article", "page_headline"]]
+minimum_words = 250
+
+[assessment.paragraph_floor]
+root_xpath = "//article"
+paragraph_xpath = ".//p"
+preferred_root_xpath = ".//section[@name='articleBody']"
+minimum_count = 4
+minimum_substantial_count = 2
+substantial_minimum_characters = 80
+
+[[assessment.negative_rules]]
+kind = "challenge"
+xpath_any = ["//script[contains(@src, 'captcha-delivery')]", "//iframe[contains(@src, 'captcha-delivery')]", "//*[@data-visible-challenge='true']"]
+text_any = ["please enable js and disable any ad blocker", "verify you are human"]
+
+[[assessment.negative_rules]]
+kind = "authentication"
+final_url_hosts = ["myaccount.nytimes.com"]
+xpath_any = ["//form[.//input[@type='password']]"]
+
+
+[session]
+candidate_verification_mode = "browser_paid_probe"
+allowed_origins = ["https://www.nytimes.com", "https://nytimes.com", "https://myaccount.nytimes.com"]
+allowed_cookie_domains = ["nytimes.com"]
+session_cookie_name_prefixes = []
+verification_minimum_words = 250
+default_verification_url = "https://www.nytimes.com/2026/01/31/business/kevin-warsh-fed-chair.html"
+
+[auth]
+login_url = "https://myaccount.nytimes.com/auth/login"
+
+[auth.launch]
+locale = "en-US"
+timezone_id = "America/New_York"
+accept_language = "en-US,en;q=0.9"
+
+[auth.controls]
+username = ["input[name='email']", "input[type='email']", "input[autocomplete='username']"]
+password = ["input[name='password']", "input[type='password']", "input[autocomplete='current-password']"]
+username_submit = ["form:has(input[type='email']) button[type='submit']", "button[data-testid='submit-email']", "button[type='submit']"]
+password_submit = ["form:has(input[type='password']) button[type='submit']", "button[data-testid='login-button']", "button[type='submit']"]
+consent = ["#onetrust-accept-btn-handler", "button:text-is(\"Accept all\")", "button:text-is(\"Continue\")"]
+
+[auth.observations.username_visible]
+editable_selectors = ["input[name='email']", "input[type='email']", "input[autocomplete='username']"]
+
+[auth.observations.password_visible]
+editable_selectors = ["input[name='password']", "input[type='password']", "input[autocomplete='current-password']"]
+
+[auth.observations.second_factor]
+any_selectors = ["input[autocomplete='one-time-code']", "input[name='code']", "input[name='verificationCode']"]
+any_text = ["two-factor authentication", "verification code"]
+
+[auth.observations.credential_rejected]
+any_text = ["the email or password you entered is incorrect", "invalid email or password", "we couldn't log you in"]
+
+[auth.observations.account_alert]
+any_text = ["account has been locked", "account is locked", "contact customer care"]
+
+[auth.observations.authenticated]
+required_hosts = ["www.nytimes.com", "nytimes.com"]
+excluded_path_prefixes = ["/auth/login", "/auth"]
+absent_selectors = ["input[name='email']", "input[type='email']", "input[autocomplete='username']", "input[name='password']", "input[type='password']", "input[autocomplete='current-password']"]

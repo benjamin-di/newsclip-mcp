@@ -1,0 +1,26 @@
+<!doctype html>
+<!--
+  NYT's first login step, modelled on a credential-free DOM measurement of
+  https://myaccount.nytimes.com/auth/enter-email taken 2026-07-28.
+
+  The password control is deliberately present, visible, enabled and READ-ONLY:
+  that is what the live page serves here, and it is why selecting the step by
+  presence (or by visibility) picks the password step and skips the username
+  step entirely. Note it carries neither a name nor an autocomplete attribute,
+  matching the measurement — `input[name='password']` found zero elements while
+  `input[type='password']` found this one.
+-->
+<html lang="en">
+  <head><title>Enter email</title></head>
+  <body>
+    <main>
+      <form action="/auth/enter-email" method="post">
+        <label>Email address
+          <input id="email" name="email" type="email" autocomplete="username">
+        </label>
+        <input id="password-decoy" type="password" readonly>
+        <button id="submit-email" type="submit">Continue</button>
+      </form>
+    </main>
+  </body>
+</html>

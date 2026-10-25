@@ -1,0 +1,53 @@
+schema_version = 1
+key = "ap"
+order = 90
+enabled_by_default = true
+
+[capabilities]
+requires_session_for_retrieve = false
+requires_session_for_search = false
+session_kind = "none"
+retrieval_transport = "http"
+search_transport = "http"
+
+[rate_budget]
+requests_per_second = 5.0
+burst = 5
+
+[identity]
+allowed_hosts = ["apnews.com", "www.apnews.com"]
+canonical_host = "apnews.com"
+path_pattern = "^/article/(?P<id>[a-z0-9][a-z0-9-]*-[0-9a-f]{32})$"
+canonical_path = "/article/{id}"
+lowercase_groups = ["id"]
+
+# ApProvider parses the official news sitemap; apnews.com/robots.txt closes
+# site search to everyone and explicitly publishes this sitemap as the
+# intended discovery surface (verified 2026-07-28).
+[search]
+kind = "adapter"
+endpoint = "https://apnews.com/news-sitemap-content.xml"
+
+[check]
+query = "Judge rules against interfaith group in lawsuit over Trump commission"
+canonical_url = "https://apnews.com/article/religious-liberty-commission-donald-trump-lawsuit-854e89edaba1d7cc9571918310410292"
+# The sitemap holds only recent items, so any pinned article ages out of
+# discovery within days — the same situation as Reuters.
+require_canonical_result = false
+
+[assessment]
+canonical_signal = "canonical_article_url"
+# AP renders no <article> element; the story body carries the
+# RichTextStoryBody class (observed 2026-07-28). A Page-main fallback is
+# deliberately omitted: every AP page — hubs, galleries, live pages — renders
+# inside Page-main, so it would satisfy article_body_structure on non-articles
+# and promote a canonical-bearing hub page as FULL.
+article_xpath = [
+  "//*[contains(concat(' ', normalize-space(@class), ' '), ' RichTextStoryBody ')]",
+]
+required_signals = ["newsarticle_jsonld", "jsonld_headline", "article_body_structure", "markdown_body", "extracted_headline"]
+# Observed in the retained 2026-09-05 HTTP403; require the interstitial title
+# and challenge-platform script together, not a story mentioning Cloudflare.
+[[assessment.negative_rules]]
+kind = "challenge"
+xpath_any = ["//html[head/title[normalize-space()='Just a moment...'] and .//script[contains(@src, '/cdn-cgi/challenge-platform/') or contains(., '/cdn-cgi/challenge-platform/')]]"]

@@ -1,0 +1,10 @@
+Newsclip's original code is licensed under the MIT license in LICENSE.
+
+Newsclip depends on separately licensed Python packages and system components.
+Their licenses continue to apply. The login browser image bundles noVNC,
+Chromium, Xvfb and x11vnc; it preserves their upstream license files and package
+copyright notices. The MIT license for Newsclip does not relicense these works.
+
+Publisher names identify compatible services. Newsclip is not affiliated with
+or endorsed by those publishers. Publisher content remains the property of its
+respective rights holders; the software license grants no rights to that content.

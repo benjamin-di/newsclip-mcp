@@ -1,0 +1,44 @@
+schema_version = 1
+key = "cnbc"
+order = 40
+enabled_by_default = true
+
+[capabilities]
+requires_session_for_retrieve = false
+requires_session_for_search = false
+session_kind = "none"
+retrieval_transport = "http"
+search_transport = "http"
+
+[rate_budget]
+requests_per_second = 5.0
+burst = 5
+
+[identity]
+allowed_hosts = ["cnbc.com", "www.cnbc.com"]
+canonical_host = "www.cnbc.com"
+path_pattern = "^/(?P<id>[0-9]{4}/[0-9]{2}/[0-9]{2}/[a-z0-9][a-z0-9-]*\\.html)$"
+canonical_path = "/{id}"
+lowercase_groups = ["id"]
+
+# CNBCProvider parses the public Queryly JSON API used by this search page.
+[search]
+kind = "adapter"
+endpoint = "https://api.queryly.com/cnbc/json.aspx"
+
+[check]
+query = "Ships shun Strait Hormuz renewed fighting"
+canonical_url = "https://www.cnbc.com/2026/07/21/strait-of-hormuz-traffic-renewed-us-iran-conflict-chokes-hormuz.html"
+
+[assessment]
+canonical_signal = "canonical_article_url"
+article_xpath = ["//article", "//*[contains(concat(' ', normalize-space(@class), ' '), ' ArticleBody-articleBody ')]"]
+required_signals = ["newsarticle_jsonld", "jsonld_headline", "article_body_structure", "markdown_body", "extracted_headline"]
+
+[[assessment.negative_rules]]
+kind = "challenge"
+title_equals = ["Access Denied"]
+
+[[assessment.negative_rules]]
+kind = "paywall"
+xpath_any = ["//*[@data-test='ArticleGate']", "//*[contains(concat(' ', normalize-space(@class), ' '), ' ArticleGate-articleGate ')]"]

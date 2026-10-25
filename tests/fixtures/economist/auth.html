@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head><title>Sign in</title></head>
+  <body>
+    <main>
+      <c-lwc-login-form>
+        <template shadowrootmode="open">
+          <form action="/s/login" method="post">
+            <lightning-input>
+              <input name="username" type="email" autocomplete="username">
+            </lightning-input>
+            <lightning-input>
+              <input type="password" autocomplete="current-password">
+            </lightning-input>
+            <lightning-button><button type="submit">Sign in</button></lightning-button>
+          </form>
+        </template>
+      </c-lwc-login-form>
+    </main>
+  </body>
+</html>

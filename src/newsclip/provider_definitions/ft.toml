@@ -1,0 +1,166 @@
+schema_version = 1
+key = "ft"
+order = 10
+enabled_by_default = true
+
+[capabilities]
+requires_session_for_retrieve = true
+session_kind = "cookie"
+retrieval_transport = "http"
+
+[rate_budget]
+# Burst covers one search page plus a few date-recovery GETs without
+# self-queuing; keep the sustained rate modest so FT does not 429 the follow-on
+# article save. Short fallback recovers faster than the previous 30s floor.
+requests_per_second = 2.0
+burst = 4
+rate_limit_fallback_seconds = 5
+
+[response_retry]
+status_code = 403
+title_equals = "Security Verification"
+required_xpath = "//*[@id='challenge-error-text']"
+
+[identity]
+allowed_hosts = ["ft.com", "www.ft.com"]
+canonical_host = "www.ft.com"
+path_pattern = "^/content/(?P<id>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+canonical_path = "/content/{id}"
+lowercase_groups = ["id"]
+
+[search]
+kind = "html"
+endpoint = "https://www.ft.com/search"
+query_parameter = "q"
+result_xpath = ["//ul[contains(concat(' ', normalize-space(@class), ' '), ' search-results__list ')]//a[contains(concat(' ', normalize-space(@class), ' '), ' js-teaser-heading-link ')]"]
+empty_result_xpath = ["//*[@data-trackable='search-no-results']"]
+next_href_xpath = ["//a[@href][contains(@href, 'page=')][.//*[normalize-space()='Next page'] or normalize-space()='Next page']"]
+page_parameter = "page"
+# One recovery hop is enough for warm latency while keeping FT's edge from
+# 429-ing the subsequent article save.
+missing_published_fetch_limit = 1
+
+[check]
+# The exact headline keeps the canary at rank 1. The earlier topical query
+# ("Chinese Moonshot Kimi K3 Anthropic") let newer stories push it to rank 26
+# by 2026-09-28, past the first 25-result page, and held FT at
+# expected_result_missing while the article still served.
+query = "Chinese AI start-up Moonshot launches model challenging Anthropic's lead"
+canonical_url = "https://www.ft.com/content/c6ecd8ce-c441-4d7c-aea6-fae3e28fb6ff"
+
+[assessment]
+canonical_signal = "canonical_content_url"
+article_xpath = ["//article", "//*[@data-trackable='article-body']", "//*[@data-component='article-body']"]
+required_signals = ["newsarticle_jsonld", "jsonld_headline", "article_body_structure", "markdown_body", "extracted_headline"]
+
+# Each transport sees a different edge surface for the same defense: the
+# browser plane is served the interactive "just a moment..." interstitial,
+# while the HTTP plane is served the non-interactive "Security Verification"
+# error page. Both are the challenge; classifying only the browser shape left
+# the HTTP shape to be reported as a bare transport failure and skipped the
+# browser fallback that can actually resolve it (live HTTP evidence
+# 2026-07-25).
+[[assessment.negative_rules]]
+kind = "challenge"
+title_equals = ["just a moment...", "security verification"]
+xpath_any = ["//*[@data-visible-challenge='true']", "//*[@id='challenge-form']", "//iframe[contains(@src, 'frame=challenge')]", "//*[@id='challenge-error-text']"]
+
+[[assessment.negative_rules]]
+kind = "authentication"
+final_url_hosts = ["accounts.ft.com"]
+xpath_any = ["//form[contains(@action, '/login') and (.//input[@type='password'] or .//input[@name='email'])]"]
+
+# A generic barrier is authentication evidence. FTProvider separately recognizes
+# the explicit account-security/password-reset notice as terminal account action.
+[[assessment.negative_rules]]
+kind = "authentication"
+final_url_path_prefixes = ["/barrier/"]
+
+# A signed-out session can be served in place: the article URL with the
+# anonymous header ("Sign In") over the subscribe barrier, no redirect. FT does
+# this when it revokes a session under its concurrent-session policy (live
+# 2026-10-15/16: access decision INVALID_SESSION_POLICY), where it used to
+# redirect to /barrier/concurrency. Every retained signed-in fetch renders the
+# "My Account" header instead, so the anonymous header is session evidence, not
+# a subscriber teaser; authentication outranks the paywall rule below.
+[[assessment.negative_rules]]
+kind = "authentication"
+xpath_any = ["//*[@data-trackable='header-anon']"]
+
+[[assessment.negative_rules]]
+kind = "paywall"
+xpath_any = ["//*[@data-trackable='paywall']", "//*[@data-content-access='subscription']"]
+text_any = ["subscribe to unlock this article"]
+
+[session]
+candidate_verification_mode = "browser_paid_probe"
+allowed_origins = ["https://accounts.ft.com", "https://www.ft.com", "https://ft.com"]
+allowed_cookie_domains = ["ft.com"]
+session_cookie_name_prefixes = ["ftsession"]
+default_verification_url = "https://www.ft.com/content/c92a5a36-55a0-4d04-b84c-d1705976987b"
+
+[auth]
+login_url = "https://accounts.ft.com/login"
+
+[auth.launch]
+locale = "en-GB"
+timezone_id = "Europe/London"
+accept_language = "en-GB,en;q=0.9"
+args = ["--disable-features=WebAuthentication,WebAuthenticationPasskeysUI,WebAuthCable,WebAuthnConditionalUI", "--disable-dev-shm-usage"]
+
+[auth.controls]
+# Live accounts.ft.com enter-email step (2026-07-22): id="enter-email" and
+# id="enter-email-next". Prefer those stable ids; keep structural fallbacks.
+username = ["#enter-email", "input[name='email']", "#email", "input[type='email']"]
+password = ["input[name='password']:not([name='_notUsed'])", "input[type='password']:not([name='_notUsed'])"]
+username_submit = [
+  "#enter-email-next",
+  "button#enter-email-next",
+  "form:has(input[name='email']) button[type='submit']",
+  "form:has(input[type='email']) button[type='submit']",
+  "form:has(#enter-email) button:has-text('Next')",
+]
+password_submit = ["form:has(input[name='password']:not([name='_notUsed'])) button[type='submit']", "form:has(input[type='password']:not([name='_notUsed'])) button[type='submit']"]
+consent = [
+  "#onetrust-accept-btn-handler",
+  "body:has-text(\"Cookies on FT Sites\") button:text-is(\"Accept\")",
+  "button:text-is(\"Accept Cookies\")",
+  "button:text-is(\"Accept all cookies\")",
+]
+passkey_skip = [
+  "body:has-text(\"Set up a passkey\") button:text-is(\"Not now\")",
+  "body:has-text(\"Set up a passkey\") :text-is(\"Not now\")",
+]
+
+[auth.observations.username_visible]
+any_selectors = ["input[name='email']", "#email", "input[type='email']"]
+
+[auth.observations.password_visible]
+any_selectors = ["input[name='password']:not([name='_notUsed'])", "input[type='password']:not([name='_notUsed'])"]
+
+[auth.observations.captcha_rejected]
+any_text = ["captcha was unsuccessful", "captcha unsuccessful"]
+
+[auth.observations.second_factor]
+any_text = ["verification code", "two-step verification"]
+
+[auth.observations.credential_rejected]
+# Live FT copy is "Email address and/or password is incorrect."
+any_text = [
+  "password is incorrect",
+  "incorrect password",
+  "could not sign you in",
+]
+
+[auth.observations.account_alert]
+any_text = ["account has been locked", "contact customer support", "your password has been reset and you have been signed out"]
+
+[auth.observations.authenticated]
+required_host_suffixes = ["ft.com"]
+excluded_hosts = ["accounts.ft.com"]
+absent_selectors = ["input[type='password']"]
+
+[auth.token_probe]
+password_form_selector = "form:has(input[name=\"password\"]:not([name=\"_notUsed\"])), form:has(input[type=\"password\"]:not([name=\"_notUsed\"]))"
+response_field_selector = "textarea[name=\"h-captcha-response\"], [name=\"h-captcha-response\"]"
+widget_selector = "[data-hcaptcha-widget-id]"

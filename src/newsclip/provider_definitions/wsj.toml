@@ -1,0 +1,132 @@
+schema_version = 1
+key = "wsj"
+order = 20
+enabled_by_default = true
+
+[capabilities]
+requires_session_for_retrieve = true
+session_kind = "cookie"
+retrieval_transport = "browser"
+search_transport = "browser"
+
+[browser_retrieval]
+warmup_urls = []
+recovery_warmup_urls = [
+  "https://www.wsj.com/",
+  "https://www.wsj.com/finance/banking/europes-biggest-banking-deal-in-years-is-getting-closer-a10ec4bc",
+]
+warmup_settle_seconds = 0
+article_settle_seconds = 0
+network_idle_timeout_seconds = 0
+navigation_wait_until = "commit"
+ready_selectors = ["article", "h1", "[data-testid='article-content']"]
+ready_timeout_seconds = 3
+
+[browser_retrieval.semantic_readiness]
+timeout_seconds = 8
+stable_seconds = 0.5
+poll_seconds = 0.1
+
+[rate_budget]
+requests_per_second = 5.0
+burst = 5
+
+[identity]
+allowed_hosts = ["wsj.com", "www.wsj.com"]
+canonical_host = "www.wsj.com"
+path_pattern = "^/(?!client(?:/|$)|news(?:/|$)|livecoverage(?:/|$)|video(?:/|$)|search(?:/|$))[^/]+/(?:[^/]+/)*[^/]+-(?P<id>[0-9a-fA-F]{8})$"
+lowercase_groups = ["id"]
+
+[search]
+kind = "html"
+endpoint = "https://www.wsj.com/search"
+query_parameter = "query"
+result_xpath = ["//a[@data-testid='flexcard-headline'][contains(@href, 'mod=Searchresults')]", "//*[contains(concat(' ', normalize-space(@class), ' '), ' headline ')]//a[@href]", "//article//a[@href]"]
+rejected_headline_prefixes = ["."]
+empty_result_xpath = ["//*[@data-testid='search-no-results']"]
+next_href_xpath = ["//a[@href][contains(@href, 'page=')][.//*[normalize-space()='Next' or normalize-space()='Next page'] or normalize-space()='Next' or normalize-space()='Next page']"]
+page_parameter = "page"
+
+[check]
+query = "Moonshot chip selloff"
+canonical_url = "https://www.wsj.com/finance/stocks/chinas-moonshot-ai-adds-to-chip-investors-worries-82b01792"
+
+[search.embedded_published]
+script_id = "__NEXT_DATA__"
+url_field = "articleUrl"
+value_field = "timestamp"
+
+[assessment]
+canonical_signal = "canonical_article_url"
+article_xpath = ["//article", "//*[@data-testid='article-content']", "//*[contains(concat(' ', normalize-space(@class), ' '), ' article-content ')]"]
+required_signals = ["newsarticle_jsonld", "jsonld_headline", "article_body_structure", "markdown_body", "extracted_headline"]
+minimum_words = 250
+
+[assessment.paragraph_floor]
+root_xpath = "//article | //*[@data-testid='article-content'] | //*[contains(concat(' ', normalize-space(@class), ' '), ' article-content ')]"
+paragraph_xpath = ".//p"
+minimum_count = 2
+minimum_substantial_count = 2
+substantial_minimum_characters = 80
+
+[[assessment.negative_rules]]
+kind = "challenge"
+xpath_any = ["//iframe[contains(@src, 'captcha-delivery')]", "//script[contains(@src, 'captcha-delivery.com')]", "//script[contains(., \"'host':'geo.captcha-delivery.com'\")]", "//*[@id='px-captcha']", "//*[@data-visible-challenge='true']"]
+text_any = ["you have been blocked", "press and hold", "verification required", "perimeterx"]
+
+[[assessment.negative_rules]]
+kind = "authentication"
+final_url_hosts = ["sso.accounts.dowjones.com"]
+final_url_paths = ["/client"]
+final_url_path_prefixes = ["/client/"]
+xpath_any = ["//form[contains(@action, '/login') and (.//input[@type='password'] or .//input[@name='emailOrUsername'])]"]
+
+[[assessment.negative_rules]]
+kind = "paywall"
+xpath_any = ["//*[@data-subscription-required]", "//*[contains(concat(' ', normalize-space(@class), ' '), ' wsj-snippet ')]", "//*[@data-page='paywall']"]
+text_any = ["subscribe to continue reading"]
+
+[session]
+candidate_verification_mode = "browser_paid_probe"
+allowed_origins = ["https://www.wsj.com", "https://wsj.com", "https://sso.accounts.dowjones.com"]
+allowed_cookie_domains = ["wsj.com", "dowjones.com"]
+session_cookie_name_prefixes = ["djcs"]
+verification_minimum_words = 250
+default_verification_url = "https://www.wsj.com/finance/banking/europes-biggest-banking-deal-in-years-is-getting-closer-a10ec4bc"
+
+[auth]
+login_url = "https://www.wsj.com/client/login"
+identity_hosts = ["sso.accounts.dowjones.com"]
+
+[auth.launch]
+locale = "en-US"
+timezone_id = "America/New_York"
+accept_language = "en-US,en;q=0.9"
+
+[auth.controls]
+username = ["input[name='emailOrUsername']", "input[type='email']", "input[autocomplete='username']"]
+password = ["input[name='password']", "input[type='password']:not([name='_notUsed'])"]
+username_submit = ["form:has(input[name='emailOrUsername']) button[type='submit']", "form:has(input[type='email']) button[type='submit']"]
+password_submit = ["form:has(input[name='password']) button[type='submit']", "form:has(input[type='password']:not([name='_notUsed'])) button[type='submit']"]
+consent = ["#onetrust-accept-btn-handler", "button:text-is(\"Accept All\")", "button:text-is(\"Yes, I Accept\")"]
+
+[auth.observations.username_visible]
+any_selectors = ["input[name='emailOrUsername']", "input[type='email']", "input[autocomplete='username']"]
+
+[auth.observations.password_visible]
+any_selectors = ["input[name='password']", "input[type='password']:not([name='_notUsed'])"]
+
+[auth.observations.second_factor]
+any_selectors = ["input[autocomplete='one-time-code']"]
+any_text = ["two-step verification"]
+
+[auth.observations.credential_rejected]
+any_text = ["incorrect password", "invalid password", "could not sign you in"]
+
+[auth.observations.account_alert]
+any_text = ["account has been locked", "contact customer support"]
+
+[auth.observations.authenticated]
+required_hosts = ["www.wsj.com", "wsj.com"]
+excluded_path_prefixes = ["/client/login", "/client/auth"]
+absent_selectors = ["input[name='emailOrUsername']", "input[type='email']", "input[autocomplete='username']", "input[name='password']", "input[type='password']:not([name='_notUsed'])"]

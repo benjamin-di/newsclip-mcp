@@ -1,0 +1,52 @@
+services:
+  newsclip:
+    image: ghcr.io/benjamin-di/newsclip-mcp:${NEWSCLIP_VERSION:-0.7.0}
+    build:
+      context: .
+      target: server
+    user: "${NEWSCLIP_UID:-1000}:${NEWSCLIP_GID:-1000}"
+    ports:
+      - "127.0.0.1:${NEWSCLIP_PORT:-8000}:8000"
+    environment:
+      NEWSCLIP_USERS_FILE: /config/users.json
+      NEWSCLIP_LOGIN_TOKEN_FILE: /config/login.token
+      NEWSCLIP_LOGIN_URL: http://newsclip-login:8080
+      NEWSCLIP_PUBLIC_URL: ${NEWSCLIP_PUBLIC_URL:-http://127.0.0.1:8000}
+      NEWSCLIP_PROVIDER_ALLOWLIST:
+      NEWSCLIP_SEARCH_API_KEY_GUARDIAN: ${NEWSCLIP_SEARCH_API_KEY_GUARDIAN:-}
+    volumes:
+      - ./local/config:/config:ro
+      - ./local/state:/state
+      - ./local/data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=512m
+    shm_size: 256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    restart: unless-stopped
+    depends_on:
+      newsclip-login:
+        condition: service_healthy
+
+  newsclip-login:
+    image: ghcr.io/benjamin-di/newsclip-login-browser:${NEWSCLIP_VERSION:-0.7.0}
+    build:
+      context: .
+      target: login
+    user: "${NEWSCLIP_UID:-1000}:${NEWSCLIP_GID:-1000}"
+    environment:
+      NEWSCLIP_USERS_FILE: /config/users.json
+      NEWSCLIP_LOGIN_TOKEN_FILE: /config/login.token
+    volumes:
+      - ./local/config:/config:ro
+      - ./local/state:/state
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=512m
+    shm_size: 256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    restart: unless-stopped
