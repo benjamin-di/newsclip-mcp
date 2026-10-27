@@ -9,10 +9,11 @@ from pydantic import ValidationError
 from newsclip.errors import (
     ProviderDefenseError,
     ProviderTransportError,
+    SessionRequiredError,
     TransportFailure,
 )
 from newsclip.http import _retry_after
-from newsclip.models import RateBudget, RawFetch, SessionArtifact
+from newsclip.models import PortableCookie, RateBudget, RawFetch, SessionArtifact
 from newsclip.network import (
     MAX_RATE_LIMIT_WAIT_SECONDS,
     MAX_RETRY_AFTER_DEFER_SECONDS,
@@ -22,6 +23,41 @@ from newsclip.network import (
 
 NOW = datetime(2026, 7, 17, tzinfo=UTC)
 URL = "https://example.test/resource"
+
+
+def test_disconnect_during_retry_prevents_reusing_admitted_credentials(tmp_path):
+    from uuid import uuid4
+
+    from newsclip.connection_controls import ConnectionControls
+
+    controls = ConnectionControls(tmp_path)
+    clock = FakeClock()
+    http = SequenceHttp(clock, [_fetch(503), _fetch()])
+
+    def wait(_seconds):
+        controls.suspend("fixture")
+
+    policy = ProviderNetworkPolicy(
+        http,
+        clock=clock,
+        sleep=wait,
+        authorize_session=lambda artifact: controls.require_active(
+            artifact.provider, artifact.account_key
+        ),
+    )
+    client = policy.for_provider("fixture", RateBudget(requests_per_second=10, burst=2))
+    admitted = SessionArtifact(
+        generation_id=uuid4(),
+        provider="fixture",
+        created_at=NOW,
+        verified_at=NOW,
+        cookies=(
+            PortableCookie(name="session", value="invented", domain="example.test"),
+        ),
+    )
+    with pytest.raises(SessionRequiredError):
+        client.get(URL, session=admitted)
+    assert len(http.call_times) == 1
 
 
 class FakeClock:

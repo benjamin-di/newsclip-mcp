@@ -275,6 +275,7 @@ class PatchrightBrowserRetriever:
         require_virtual_display: bool = False,
         retain_profile: bool = True,
         session_cookie_domains: Mapping[str, frozenset[str]] | None = None,
+        authorize_session: Callable[[SessionArtifact], None] | None = None,
     ) -> None:
         self._headless = headless
         self._context_factory = context_factory
@@ -321,6 +322,7 @@ class PatchrightBrowserRetriever:
         self._require_virtual_display = require_virtual_display
         self._retain_profile = retain_profile
         self._session_cookie_domains = dict(session_cookie_domains or {})
+        self._authorize_session = authorize_session
         self._lock = threading.RLock()
         self._held: _HeldProfile | None = None
         self._closed = False
@@ -350,6 +352,8 @@ class PatchrightBrowserRetriever:
         with self._lock:
             if self._closed or not self._retain_profile:
                 return
+            if self._authorize_session is not None:
+                self._authorize_session(session)
             page, _recovery = self._ensure_page(
                 Path(self._profile_ref(session.provider, session)),
                 provider=session.provider,
@@ -464,6 +468,8 @@ class PatchrightBrowserRetriever:
         try:
             with self._operation_lock(budget):
                 try:
+                    if session is not None and self._authorize_session is not None:
+                        self._authorize_session(session)
                     if self._closed:
                         raise ProviderTransportError(
                             "browser retrieval plane is closed"

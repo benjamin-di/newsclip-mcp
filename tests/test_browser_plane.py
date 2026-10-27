@@ -52,6 +52,7 @@ from newsclip.challenges import (
     ChallengeState,
     ChallengeVendor,
 )
+from newsclip.connection_controls import ConnectionControls
 from newsclip.errors import (
     ContentNotFullError,
     PersistenceError,
@@ -2198,6 +2199,38 @@ def test_keep_alive_skips_relaunch_on_second_warm_get(tmp_path: Path) -> None:
     assert TimingStep.ARTICLE_NAVIGATION in second_steps
     retriever.close()
     assert created[0].closed is True
+
+
+def test_stale_admitted_session_cannot_reopen_browser_after_disconnect(tmp_path):
+    controls = ConnectionControls(tmp_path)
+    created = []
+
+    def factory(**options):
+        context = FakeContext(**options)
+        created.append(context)
+        return context
+
+    retriever = PatchrightBrowserRetriever(
+        context_factory=factory,
+        profile_resolver=lambda _provider, _account: tmp_path / "profile",
+        lease_manager=LeaseManager(tmp_path / "leases"),
+        authorize_session=lambda artifact: controls.require_active(
+            artifact.provider, artifact.account_key
+        ),
+        clock=lambda: NOW,
+    )
+    admitted = _session()
+    retriever.warm(admitted)
+    assert len(created) == 1
+    controls.suspend(admitted.provider)
+    retriever.release()
+    assert created[0].closed
+    with pytest.raises(SessionRequiredError):
+        retriever.get(ARTICLE_URL, session=admitted)
+    with pytest.raises(SessionRequiredError):
+        retriever.warm(admitted)
+    assert len(created) == 1
+    retriever.close()
 
 
 def test_request_scoped_retrieval_releases_profile_before_return(

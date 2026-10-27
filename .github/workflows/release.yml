@@ -75,7 +75,8 @@ jobs:
           tags: ghcr.io/${{ github.repository_owner }}/newsclip-mcp:${{ steps.version.outputs.candidate }}
           build-args: |
             VCS_REF=${{ github.sha }}
-            IMAGE_VERSION=${{ steps.version.outputs.version }}
+            VERSION=${{ steps.version.outputs.version }}
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
             BUILD_SOURCE_FINGERPRINT=${{ steps.version.outputs.fingerprint }}
           provenance: mode=max
           sbom: true
@@ -92,7 +93,8 @@ jobs:
           tags: ghcr.io/${{ github.repository_owner }}/newsclip-login-browser:${{ steps.version.outputs.candidate }}
           build-args: |
             VCS_REF=${{ github.sha }}
-            IMAGE_VERSION=${{ steps.version.outputs.version }}
+            VERSION=${{ steps.version.outputs.version }}
+            SOURCE_URL=${{ github.server_url }}/${{ github.repository }}
             BUILD_SOURCE_FINGERPRINT=${{ steps.version.outputs.fingerprint }}
           provenance: mode=max
           sbom: true
@@ -102,9 +104,25 @@ jobs:
         env:
           SERVER_IMAGE: ghcr.io/${{ github.repository_owner }}/newsclip-mcp@${{ steps.server.outputs.digest }}
           LOGIN_IMAGE: ghcr.io/${{ github.repository_owner }}/newsclip-login-browser@${{ steps.login.outputs.digest }}
+          VCS_REF: ${{ github.sha }}
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          docker pull "$SERVER_IMAGE"
-          docker pull "$LOGIN_IMAGE"
+          for image in "$SERVER_IMAGE" "$LOGIN_IMAGE"; do
+            docker pull "$image"
+            docker image inspect "$image" | jq -e \
+              --arg revision "$VCS_REF" --arg source "$SOURCE_URL" --arg version "$VERSION" \
+              '.[0].Config.Labels | .["org.opencontainers.image.revision"] == $revision and
+                .["org.opencontainers.image.source"] == $source and
+                .["org.opencontainers.image.version"] == $version' >/dev/null \
+              || { echo "ERROR: candidate OCI source, revision or version does not match this release" >&2; exit 1; }
+          done
+          pocket_id="$RUNNER_TEMP/newsclip-pocket-id"
+          curl --fail --silent --show-error --location \
+            https://github.com/pocket-id/pocket-id/releases/download/v2.19.1/pocket-id_linux_amd64 -o "$pocket_id"
+          printf '%s  %s\n' fbe58b3af6e225600136c7da033810d2d86436fbd13a135fa52205f467544436 "$pocket_id" \
+            | sha256sum --check --status
+          chmod 755 "$pocket_id"
           docker run --rm --init --network none --read-only --tmpfs /tmp:rw,exec,mode=1777,size=1g \
             -v "$PWD/scripts/smoke_standalone.py:/acceptance.py:ro" \
             --entrypoint python "$SERVER_IMAGE" /acceptance.py
@@ -112,6 +130,8 @@ jobs:
             -v "$PWD/scripts/smoke_browser_isolation.py:/acceptance.py:ro" \
             --entrypoint python "$SERVER_IMAGE" /acceptance.py
           timeout 300 docker run --rm --init --network none --read-only --tmpfs /tmp:rw,exec,mode=1777,size=1g --shm-size=256m \
+            -v "$pocket_id:/pocket-id:ro" -e POCKET_ID_BIN=/pocket-id \
+            -v "$PWD/scripts/pocket_id_acceptance.py:/pocket_id_acceptance.py:ro" \
             -v "$PWD/scripts/standalone_e2e.py:/acceptance.py:ro" \
             --entrypoint python "$LOGIN_IMAGE" /acceptance.py
       - name: Build source and wheel distributions

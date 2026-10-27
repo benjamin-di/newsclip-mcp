@@ -38,8 +38,10 @@ error envelope exposed by the CLI/MCP adapters. Authentication errors return
 
 `search_start` returns a cursor and first page. Other search calls return a
 `SearchResponse`, including source status and coverage limitations. `/health`
-returns readiness without user/account data. Sign-in relay routes use their
-own expiring link authority rather than the user's bearer header.
+returns readiness without user/account data. Connection and viewer routes require
+the mapped owner's OIDC browser session. Their expiring identifiers select an
+attempt; they do not grant authority. A reader bearer cannot manage a connection.
+See the [permission boundaries and revocation rules](AUTHENTICATION.md#permission-boundaries).
 
 ## MCP
 

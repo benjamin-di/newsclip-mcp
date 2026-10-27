@@ -76,6 +76,8 @@ class PublicErrorReason(StrEnum):
     NOT_ENTITLED = NOT_ENTITLED_REASON
     INTERACTIVE_CHALLENGE = "interactive_challenge"
     AUTHENTICATION_REQUIRED = "authentication_required"
+    CONNECTION_DISCONNECTED = "connection_disconnected"
+    CONNECTION_INTERACTIVE = "connection_interactive"
     RENDER_TIMEOUT = "browser_semantic_readiness_timeout"
     UNSEARCHABLE_QUERY = "unsearchable_query"
     #: An imported session reached the provider but could not prove access.

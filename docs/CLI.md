@@ -26,7 +26,7 @@ combined with a remote server URL.
 | `reextract ARTICLE_ID` | Re-extract the saved raw bytes |
 | `archive-integrity` | Inspect SQLite and foreign-key integrity |
 | `archive-rebuild-fts` | Rebuild the user's full-text index |
-| `auth connect PROVIDER` | Create a human sign-in link |
+| `auth connect PROVIDER` | Return the owner's Connections page without starting or replacing an attempt |
 | `auth login PROVIDER` | Alias for human connection when using a remote server |
 | `auth status PROVIDER` | Read stored session health; does not sign in |
 
@@ -57,3 +57,7 @@ verified identity header are both required, and unknown users are refused.
 `mcp` serves local stdio MCP. `mcp-http` uses the multi-user server when
 `NEWSCLIP_USERS_FILE` is configured; a legacy single-user HTTP deployment uses
 its dedicated bearer configuration.
+This is a backend compatibility path, not an exception to required OIDC browser
+management. Local process access inherits the host administrator's trust; it is
+not per-agent OAuth delegation. See [Authentication](AUTHENTICATION.md) before
+exposing a backend or granting a gateway route.

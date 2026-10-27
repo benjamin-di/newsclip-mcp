@@ -35,6 +35,7 @@ from .browser_runtime.leases import (
     ordered_file_lease,
 )
 from .browser_runtime.surface import BrowserRuntimeError
+from .connection_controls import ConnectionControls
 from .contracts import (
     AuthBrowserSession,
     BrowserProfileAccess,
@@ -237,6 +238,9 @@ class SessionStore:
         # ``http`` remains the fallback for direct library use.
         self._client_factory = client_factory
         self._clock = clock or (lambda: datetime.now(UTC))
+        self.connection_controls = ConnectionControls(
+            self.root, clock=lambda: self._now().timestamp()
+        )
         self._fault_hook = fault_hook
         self._leases = lease_manager or LeaseManager(
             Path.home() / ".local/state/newsclip/locks"
@@ -268,6 +272,7 @@ class SessionStore:
         verification_fetch: RawFetch,
         *,
         expected_generation: UUID | None,
+        connection_revision: str | None = None,
     ) -> None:
         """Publish a human-created profile only after independent paid proof.
 
@@ -304,6 +309,7 @@ class SessionStore:
                 candidate.provider,
                 candidate.account_key,
                 StoredSession(status=SessionStatus.VERIFIED, artifact=candidate),
+                connection_revision=connection_revision,
             )
 
     def get_valid_session(
@@ -319,6 +325,8 @@ class SessionStore:
         """
 
         recipe = self._recipe(provider)
+        account_key = self._validated_account_key(account_key)
+        self.connection_controls.require_active(provider, account_key)
         stored = self._load(provider, account_key)
         artifact = self._structural_artifact(stored, recipe, account_key)
         if artifact is None:
@@ -427,6 +435,8 @@ class SessionStore:
         allow_credential_mint: bool,
     ) -> AcquiredSession:
         recipe = self._recipe(provider)
+        account_key = self._validated_account_key(account_key)
+        self.connection_controls.require_maintenance(provider, account_key)
         adapter = self._adapter(provider)
 
         # Environment preparation may re-exec this command. Check the cheapest
@@ -852,6 +862,8 @@ class SessionStore:
         self, provider: str, payload: object, *, account_key: str
     ) -> SessionArtifact:
         recipe = self._recipe(provider)
+        account_key = self._validated_account_key(account_key)
+        self.connection_controls.require_maintenance(provider, account_key)
         now = self._now()
         cookies = normalize_cookie_import(
             payload,
@@ -949,6 +961,74 @@ class SessionStore:
 
         self.reset(provider, account_key)
 
+    def disconnect(
+        self,
+        provider: str,
+        account_key: str = "default",
+        *,
+        connection_revision: str | None = None,
+        drain: Callable[[], None] | None = None,
+    ) -> None:
+        """Block admission before draining and removing this account's credentials."""
+        self._recipe(provider)
+        account_key = self._validated_account_key(account_key)
+        revision = (
+            self.connection_controls.suspend(provider, account_key)
+            if connection_revision is None
+            else connection_revision
+        )
+        with self._lock(provider, account_key, timeout_seconds=2):
+            if not self.connection_controls.disconnect_current(
+                provider, account_key, revision
+            ):
+                return
+            if drain is not None:
+                drain()
+            stored = self._load_locked(provider, account_key) or StoredSession()
+            base = (
+                self._profiles.path(provider, account_key)
+                if self._profiles is not None
+                else self.root / "browser-profiles" / provider / account_key
+            )
+            if base.parent.is_symlink():
+                raise PersistenceError(
+                    "browser profile directory must not be a symlink"
+                )
+            paths = []
+            if base.parent.exists():
+                for path in base.parent.iterdir():
+                    suffix = path.name.removeprefix(base.name + "--")
+                    if path.name == base.name or (
+                        path.name.startswith(base.name + "--")
+                        and len(suffix) == 32
+                        and all(c in "0123456789abcdef" for c in suffix)
+                    ):
+                        paths.append(path)
+            for profile in paths:
+                try:
+                    with self._leases.profile(profile, timeout_seconds=1):
+                        if profile.is_symlink() or not profile.is_dir():
+                            raise PersistenceError(
+                                "browser profile cannot be safely removed"
+                            )
+                        shutil.rmtree(profile)
+                except (LeaseBusyError, OSError):
+                    raise PersistenceError(
+                        "browser profile cleanup is still pending"
+                    ) from None
+            cleared = stored.model_copy(
+                update={
+                    "artifact": None,
+                    "status": SessionStatus.REQUIRED
+                    if stored.status is SessionStatus.VERIFIED
+                    else stored.status,
+                }
+            )
+            self._write(provider, account_key, cleared)
+            self.connection_controls.disconnected(
+                provider, account_key, revision=revision
+            )
+
     def acknowledge(self, provider: str, account_key: str = "default") -> None:
         """Acknowledge a terminal/cooldown state without reading credentials."""
 
@@ -971,8 +1051,20 @@ class SessionStore:
 
     def status(self, provider: str, account_key: str = "default") -> SessionHealth:
         recipe = self._recipe(provider)
+        account_key = self._validated_account_key(account_key)
         stored = self._inspect(provider, account_key) or StoredSession()
         status = stored.status
+        blocker = self.connection_controls.maintenance_blocker(provider, account_key)
+        if blocker:
+            return SessionHealth(
+                provider=provider,
+                account_key=account_key,
+                status=SessionStatus.OPERATOR_ACTION,
+                failure_reason_code=blocker,
+                last_verified_at=stored.artifact.verified_at
+                if stored.artifact
+                else None,
+            )
         if (
             status is SessionStatus.VERIFIED
             and self._structural_artifact(stored, recipe, account_key) is None
@@ -1262,8 +1354,23 @@ class SessionStore:
             stored.artifact.assert_identity(provider, account_key)
         return stored
 
-    def _write(self, provider: str, account_key: str, stored: StoredSession) -> None:
-        with timing_step(TimingStep.SESSION_PERSIST, provider=provider):
+    def _write(
+        self,
+        provider: str,
+        account_key: str,
+        stored: StoredSession,
+        *,
+        connection_revision: str | None = None,
+    ) -> None:
+        with (
+            timing_step(TimingStep.SESSION_PERSIST, provider=provider),
+            self.connection_controls.publication(
+                provider,
+                account_key,
+                revision=connection_revision,
+                authority=stored.artifact is not None,
+            ),
+        ):
             self._write_untimed(provider, account_key, stored)
 
     def _write_untimed(
@@ -1306,13 +1413,17 @@ class SessionStore:
             raise PersistenceError("session state write failed") from error
 
     @contextmanager
-    def _lock(self, provider: str, account_key: str):
+    def _lock(
+        self, provider: str, account_key: str, *, timeout_seconds: float | None = None
+    ):
         directory = self._provider_directory(provider)
         path = directory / f"{account_key}.lock"
         lease = ordered_file_lease(
             path,
             kind=LeaseKind.SESSION_GENERATION,
-            timeout_seconds=self._session_lock_timeout_seconds,
+            timeout_seconds=self._session_lock_timeout_seconds
+            if timeout_seconds is None
+            else timeout_seconds,
         )
         try:
             lease.__enter__()
@@ -1419,6 +1530,7 @@ class SessionStore:
         account_key: str,
         challenge_mode: ChallengeMode,
     ) -> FlowCandidate:
+        self.connection_controls.require_maintenance(provider, account_key)
         self._assert_credential_ready(provider)
         if self._diagnostic_trace is not None:
             self._diagnostic_trace.require_write_ready(provider)

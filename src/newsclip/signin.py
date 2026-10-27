@@ -15,6 +15,8 @@ from uuid import uuid4
 
 from pydantic import HttpUrl
 
+from .account_keys import require_account_key
+from .connection_controls import ConnectionControls
 from .models import RawFetch, SessionArtifact
 from .session_cookies import SessionCookiesMissing, normalize_browser_cookie_export
 from .sessions import SessionStore
@@ -74,6 +76,10 @@ def human_signin(
 
     user = require_user(window.params["user"])
     provider_key = window.params["provider"]
+    account_key = require_account_key(window.params.get("account_key", "default"))
+    revision = window.params.get("connection_revision")
+    if not isinstance(revision, str):
+        raise ValueError("sign-in requires an application-issued connection revision")
     provider = (registry or build_registry()).get(provider_key)
     spec = (spec_loader or load_provider_spec)(provider_key)
     recipe = provider.login_recipe
@@ -95,8 +101,13 @@ def human_signin(
     )
     with user_scope(user):
         root = application_root("NEWSCLIP_STATE_HOME", ".local/state")
+    controls = ConnectionControls(root)
+    if not controls.current(provider_key, account_key, revision):
+        raise ValueError("sign-in target has been replaced or disconnected")
     profile_id = uuid4()
-    profile = root / "browser-profiles" / provider_key / f"default--{profile_id.hex}"
+    profile = (
+        root / "browser-profiles" / provider_key / f"{account_key}--{profile_id.hex}"
+    )
     profile.mkdir(mode=0o700, parents=True)
     published = False
     service = None
@@ -106,7 +117,9 @@ def human_signin(
         store = service._sessions
         if not isinstance(store, SessionStore):
             raise RuntimeError("sign-in service requires a session manager")
-        expected_generation = store.current_generation(provider_key)
+        if store.root.resolve() != root.resolve():
+            raise RuntimeError("sign-in and reader must use the same user state root")
+        expected_generation = store.current_generation(provider_key, account_key)
         with sync_playwright() as playwright:
             context = playwright.chromium.launch_persistent_context(
                 profile,
@@ -224,6 +237,7 @@ def human_signin(
                                 browser_profile_id=profile_id,
                                 generation_id=uuid4(),
                                 provider=provider_key,
+                                account_key=account_key,
                                 created_at=now,
                                 verified_at=verification.verified_at,
                                 cookies=cookies,
@@ -242,7 +256,10 @@ def human_signin(
             service_closed = True
             service.close()
             store.promote_browser_session(
-                candidate, proof, expected_generation=expected_generation
+                candidate,
+                proof,
+                expected_generation=expected_generation,
+                connection_revision=revision,
             )
             published = True
             window.finish("connected")
@@ -273,7 +290,13 @@ def build_signin_app(*, runner: Callable | None = None, users_path: Path | None 
     registry = build_registry()
 
     def start_params(body):
-        if set(body) - {"layout", "user", "provider"}:
+        if set(body) - {
+            "layout",
+            "user",
+            "provider",
+            "account_key",
+            "connection_revision",
+        }:
             raise ValueError("invalid sign-in parameters")
         user, provider = body.get("user"), body.get("provider")
         if (
@@ -290,7 +313,24 @@ def build_signin_app(*, runner: Callable | None = None, users_path: Path | None 
             raise ValueError("invalid sign-in target") from error
         if selected.login_recipe is None:
             raise ValueError("invalid sign-in target")
-        return {"user": user, "provider": provider, "key": f"{user}:{provider}"}
+        account_key = require_account_key(body.get("account_key", "default"))
+        revision = body.get("connection_revision")
+        if not isinstance(revision, str) or not 32 <= len(revision) <= 128:
+            raise ValueError("invalid sign-in revision")
+        with user_scope(user):
+            controls = ConnectionControls(
+                application_root("NEWSCLIP_STATE_HOME", ".local/state")
+            )
+        if not controls.current(provider, account_key, revision):
+            raise ValueError("invalid sign-in revision")
+        controls.started(provider, account_key, revision)
+        return {
+            "user": user,
+            "provider": provider,
+            "account_key": account_key,
+            "connection_revision": revision,
+            "key": f"{user}:{provider}:{account_key}",
+        }
 
     windows = Windows(runner or human_signin, slots=4, minutes=10)
     app = build_app(

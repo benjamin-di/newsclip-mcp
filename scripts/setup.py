@@ -48,9 +48,16 @@ def main() -> None:
             (
                 f"NEWSCLIP_UID={os.getuid()}\nNEWSCLIP_GID={os.getgid()}\n"
                 f"NEWSCLIP_VERSION={__version__}\nNEWSCLIP_PUBLIC_URL={origin}\n"
+                "NEWSCLIP_CONNECTIONS_PUBLIC_URL=\n"
+                "NEWSCLIP_MCP_PUBLIC_URL_ALIASES=\n"
+                "NEWSCLIP_CONNECTIONS_ISSUER=\nNEWSCLIP_CONNECTIONS_CLIENT_ID=\n"
+                "NEWSCLIP_CONNECTIONS_GROUP=\n"
+                "NEWSCLIP_CONNECTIONS_ACCOUNT_CLAIM=\n"
+                "NEWSCLIP_CONNECTIONS_BINDINGS_FILE=\n"
+                "NEWSCLIP_CONNECTIONS_CLIENT_SECRET_FILE=\n"
             ).encode(),
         )
-    print("OK: private configuration created. Start with docker compose up -d.")
+    print("OK: private configuration created. Configure browser OIDC before startup.")
     for user in args.user:
         print(f"User URL: {origin}/users/{user}; token file: local/tokens/{user}.token")
 

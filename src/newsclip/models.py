@@ -316,10 +316,10 @@ class SearchResult(FrozenModel):
 
 
 class ConnectionInfo(FrozenModel):
-    """An expiring human sign-in link containing no session material."""
+    """A human Connections link; permanent owner pages have no expiry."""
 
     url: HttpUrl
-    expires_at: AwareDatetime
+    expires_at: AwareDatetime | None = None
     provider: str
 
     def public_dict(self) -> dict[str, Any]:

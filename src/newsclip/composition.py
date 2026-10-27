@@ -43,6 +43,7 @@ from .challenge_catalog import build_challenge_resolver
 from .challenge_detection import detect_challenge_for_reads
 from .challenge_transport import ChallengeAwareHttpClient
 from .challenges import ChallengeMode
+from .connection_controls import ConnectionControls
 from .contracts import HttpClient, LoginRecipe, SessionAcquisitionAdapter
 from .defense import DefenseState
 from .errors import (
@@ -387,7 +388,12 @@ def _compose_service(
     # One network policy for the whole process: retrieval, read-path probes,
     # and SessionStore verification all draw from the same per-provider token
     # bucket, so no store traffic is unmetered.
-    network = ProviderNetworkPolicy(http)
+    connection_controls = ConnectionControls(state_root)
+
+    def authorize_session(artifact: SessionArtifact) -> None:
+        connection_controls.require_active(artifact.provider, artifact.account_key)
+
+    network = ProviderNetworkPolicy(http, authorize_session=authorize_session)
     budgets = {provider.key: provider.rate_budget() for provider in registry}
     browser_retriever: PatchrightBrowserRetriever | None = None
     if browser_providers:
@@ -395,6 +401,7 @@ def _compose_service(
             lease_manager=lease_manager,
             runtime=runtime,
             profile_resolver=profiles.path,
+            authorize_session=authorize_session,
             policies={key: specs[key].browser_retrieval for key in browser_providers},
             readiness_evaluators={
                 key: _browser_readiness_evaluator(browser_providers[key], extractor)

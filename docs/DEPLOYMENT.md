@@ -9,7 +9,14 @@ Run the README setup command from your checkout before starting Compose. It
 creates `local/config`, `local/tokens`, `local/state`, `local/data`, and `.env`
 with private permissions and the current user/group ids. All generated state is
 ignored by Git. Run setup again with additional `--user` arguments to add users;
-existing matching credentials are preserved. Restart both services afterwards.
+existing matching credentials are preserved. Configure browser identity before
+starting either service; missing OIDC configuration prevents web startup.
+Restart both services afterwards.
+
+Browser identity, delegated API admission and publisher credentials are separate
+configuration boundaries. Read the [permissions model](AUTHENTICATION.md#permission-boundaries)
+before granting access. Required browser authentication has no link-only
+compatibility setting; optional worker configuration does not relax it.
 
 ## Remote access
 
@@ -18,14 +25,37 @@ place a reverse proxy in front of the loopback reader port. Forward WebSocket
 upgrades for `/users/USER/connect/…/vnc`, preserve the request path, and preserve
 the external Host header. Do not log bearer headers, sign-in link paths or
 query strings. The application validates Host and Origin against the configured
-public origin. Do not publish the login service or its display ports.
+public origin. Forward `/connections/` and its login, callback and POST action
+routes as well. Do not publish the login service or its display ports.
+
+Register one OIDC client with callback exactly
+`NEWSCLIP_CONNECTIONS_PUBLIC_URL/connections/callback` (use the API public URL
+when the browser URL is empty), and authorization-code plus PKCE
+support. Use HTTPS for the application and issuer. Configure a required group
+and either a signed claim whose value is a registered Newsclip user id, or a
+private JSON bindings file of the form
+`{"https://identity.example.com": {"stable-subject": "alice"}}`.
+The issuer must match exactly. Group membership alone never selects an account.
+Before changing a user's binding, disconnect their existing subscriptions;
+changing aliases is not an account-transfer operation.
 
 ## Configuration
 
 | Setting | Purpose |
 |---|---|
 | `NEWSCLIP_USERS_FILE` | Required JSON registry of user ids and token hashes |
-| `NEWSCLIP_PUBLIC_URL` | Public origin used for sign-in links and request validation |
+| `NEWSCLIP_PUBLIC_URL` | MCP/native API public origin and request validation |
+| `NEWSCLIP_CONNECTIONS_PUBLIC_URL` | Browser-only origin/base path; defaults to the API public URL |
+| `NEWSCLIP_MCP_PUBLIC_URL_ALIASES` | Optional comma-separated trusted API URL aliases; empty by default |
+| `NEWSCLIP_CONNECTIONS_ISSUER` | Required OIDC issuer URL |
+| `NEWSCLIP_CONNECTIONS_CLIENT_ID` | Required browser client id |
+| `NEWSCLIP_CONNECTIONS_GROUP` | Required browser-management group |
+| `NEWSCLIP_CONNECTIONS_ACCOUNT_CLAIM` | Signed claim mapping to registered user id; choose this or bindings |
+| `NEWSCLIP_CONNECTIONS_BINDINGS_FILE` | Issuer-scoped subject-to-user JSON; choose this or a signed claim |
+| `NEWSCLIP_CONNECTIONS_CLIENT_SECRET_FILE` | Optional owned, mode-0600 OIDC client secret file |
+| `NEWSCLIP_TRUSTED_PROXY_TOKEN` | Dedicated gateway-to-backend credential; not an agent grant or browser credential |
+| `NEWSCLIP_TRUSTED_USER_HEADER` | Gateway-injected registered user, after stripping client-supplied copies |
+| `NEWSCLIP_OPS_BEARER_TOKEN` | Separate operator-surface credential; never a reader or browser-management token |
 | `NEWSCLIP_LOGIN_URL` | Private login-service address |
 | `NEWSCLIP_LOGIN_TOKEN_FILE` | Private file containing the shared internal service token |
 | `NEWSCLIP_STATE_HOME` | Sessions, profiles, locks and private diagnostic state |
@@ -37,6 +67,17 @@ public origin. Do not publish the login service or its display ports.
 The Guardian API key is deployment-level configuration. Set it only where its
 registered access terms cover the intended use. A missing key affects Guardian
 operations, not the other providers.
+
+A separate browser origin does not expand MCP or API admission. Only
+`/connections/` and `/users/USER/connect/…` use that origin; MCP and native API
+paths retain their configured host and origin checks. Keep the API public URL
+fixed when introducing a browser host. Account state and archive paths stay
+unchanged.
+An existing public API port may be listed explicitly in
+`NEWSCLIP_MCP_PUBLIC_URL_ALIASES`. Only those fixed API hosts/origins are added;
+the separate browser host/origin cannot be an alias. This supports proxies
+that preserve legacy Origin while canonicalizing Host, without admitting
+unknown internal hosts.
 
 ## Backups and upgrades
 
@@ -55,6 +96,23 @@ Before upgrading, back up each archive and read the release notes. Change
 -d`. Confirm `docker compose ps` reports both services healthy and exercise
 `auth status` and a retrieval. Retain the previous image version for rollback;
 restore a backup only when the older version cannot read the current schema.
+
+For the mandatory browser-auth migration, configure the OIDC client first, then upgrade
+both the reader and login service together with the same persistent state
+mount. Verify their controls before exposing Connections through the proxy.
+Preserve `users/USER/connections/` and `connections-browser/` with the private
+state. Once disconnect has been used, an older image that ignores its barrier
+is not a safe rollback target. Restore service with a compatible image or fix
+forward; do not delete controls to make a subscription appear connected.
+
+Validate the gateway's audience/scope/grant/group-ceiling decisions separately:
+an admitted API caller must not manage a browser connection, and a signed-in
+browser owner must not acquire an agent API grant. Check revocation according
+to each layer's token/session/cache lifetime; browser groups are stored claims,
+not a live membership lookup. Test cancellation, incomplete disconnect cleanup
+and owner recovery from fresh state as well as reuse after restart. Record live
+identities, grants, credential custody and rollout receipts privately; the
+[project workplan](../ROADMAP.md) lists the source/artifact acceptance still required.
 
 ## Troubleshooting
 

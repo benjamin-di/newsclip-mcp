@@ -8,7 +8,9 @@ from newsclip.tenancy import add_user
 
 
 @pytest.fixture
-def accounts(tmp_path):
+def accounts(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEWSCLIP_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("NEWSCLIP_DATA_HOME", str(tmp_path / "data"))
     registry = tmp_path / "users.json"
     tokens = {}
     for user in ("alice", "bob"):

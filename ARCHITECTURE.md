@@ -29,10 +29,26 @@ incidents, search cursors, archives and server exports use those roots.
 Callbacks preserve the construction user's context when invoked from a worker.
 The host administrator remains trusted.
 
+API delegation, browser management and publisher access are separate authority
+layers. A gateway such as Agentgateway validates the API caller's audience,
+scopes, explicit grant and group ceiling before selecting a registered backend
+user. Newsclip validates its own native/proxy credential and user storage
+boundary; those backend credentials do not implement OAuth delegation policy.
+OIDC browser ownership cannot substitute for API admission, and a publisher
+session cannot grant an agent new API permissions. See the complete
+[permission and revocation model](docs/AUTHENTICATION.md#permission-boundaries).
+
 ## Human sign-in
 
-The authenticated `connect` operation creates a short-lived relay link for one
-provider and user. A separate private browser service validates the target and
+The authenticated `connect` operation returns the permanent owner Connections
+page without changing connection state. Only the mapped owner's POST Start
+creates or replaces a short-lived relay link and pauses maintenance. Every
+viewer request additionally requires a server-side
+OIDC browser session mapped to that same registered user. The shared
+signin-window OIDC module owns protocol validation, opaque sessions and fresh
+reauthentication; Newsclip owns user bindings and publisher authority. A copied
+link or MCP bearer cannot substitute for browser identity.
+A separate private browser service validates the target and
 opens a restricted signin-window. The person drives the publisher's page.
 Top-level navigation is limited to the provider and required identity hosts;
 resource requests and DNS resolution have explicit allowlists. Browser policy
@@ -48,6 +64,14 @@ replacing existing verified authority.
 Retained browser state and portable session authority are distinct. A profile
 alone is not permission to read an article. Browser readers use the profile
 associated with the active verified session and serialize access with leases.
+
+Durable per-user/provider/account controls fence the actual session writer,
+reader and maintenance. Disconnect persists its barrier before draining runtime
+and profile leases, then removes active authority. Failed cleanup remains
+blocked across restart. Human attempts carry an immutable revision as well as
+the existing session-generation check; cancelled or superseded workers cannot
+publish. Maintenance pauses for pending human attempts without resetting its
+budgets or holds. Private archives remain independent of subscription access.
 
 ## Retrieval and persistence
 

@@ -23,6 +23,8 @@ COPY src ./src
 RUN uv sync --locked --no-dev --extra mcp --extra signin
 ARG VCS_REF=unknown
 ARG IMAGE_VERSION=development
+ARG VERSION=${IMAGE_VERSION}
+ARG SOURCE_URL=https://github.com/benjamin-di/newsclip-mcp
 ARG BUILD_SOURCE_FINGERPRINT=
 ENV NEWSCLIP_BUILD_REVISION=${VCS_REF} NEWSCLIP_BUILD_DIRTY=0 \
     NEWSCLIP_BUILD_SOURCE_FINGERPRINT=${BUILD_SOURCE_FINGERPRINT}
@@ -31,9 +33,9 @@ RUN if [ -n "$BUILD_SOURCE_FINGERPRINT" ]; then \
     fi
 LABEL org.opencontainers.image.title="Newsclip" \
       org.opencontainers.image.description="Private news search, reading and archiving with human sign-in" \
-      org.opencontainers.image.source="https://github.com/benjamin-di/newsclip-mcp" \
+      org.opencontainers.image.source="${SOURCE_URL}" \
       org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.licenses="MIT"
 ENTRYPOINT ["dumb-init", "--"]
 

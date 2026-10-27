@@ -29,10 +29,17 @@ git clone https://github.com/benjamin-di/newsclip-mcp.git
 cd newsclip-mcp
 uv sync --locked --extra mcp --extra signin
 uv run python scripts/setup.py --user alice --user bob
+# Configure OIDC in .env as described in docs/DEPLOYMENT.md before startup.
 docker compose up -d
 ```
 
 Setup writes private token files and configuration without printing secrets.
+Remote sign-in requires an OIDC provider such as Pocket ID and a verified
+identity-to-user binding. Open `/connections/` to manage your own subscriptions;
+assistant API access remains separate from browser management.
+This identity check is required for every remote management attempt, including
+the viewer and its WebSocket. A copied link or MCP bearer grants no management
+authority. See the [permission boundaries](docs/AUTHENTICATION.md#permission-boundaries).
 Each person uses their own URL and token file:
 
 ```sh
@@ -78,8 +85,19 @@ browser setup.
 For MCP, connect your client to
 `http://127.0.0.1:8000/users/alice/mcp` with Alice's bearer token. The server
 exposes `search`, `get`, `save`, `archive_search`, `archive_get`, `reextract`,
-`session_status`, and `connect`. `connect` returns a human sign-in link; read
+`session_status`, and `connect`. `connect` returns the owner's Connections page
+without starting or replacing sign-in (`expires_at` is `null` for that permanent
+page). Only the authenticated owner can press Connect. Upgrade clients with the
+server for this nullable response field. Read
 operations never submit credentials.
+
+Pocket ID establishes human browser identity. Agentgateway or another admission
+gateway separately checks an agent's audience, scopes, explicit grant and group
+ceiling. Newsclip then enforces the selected registered user's application
+credential and storage boundary. Saved publisher sessions establish provider
+access only for that user; signing in does not delegate the user's API access
+to an agent. Backend tokens do not encode OAuth scope policy, so protect direct
+backend routes from bypassing the gateway's admission decisions.
 
 For Python:
 
@@ -148,3 +166,24 @@ Human sign-in remains the default; maintenance uses the same public package
 with separate runtime authority.
 
 See [Upgrading](docs/UPGRADING.md) for account, maintenance and health-contract changes.
+
+## Required controls for hosted adoption
+
+Set `CONNECTIONS_REQUIRE_CONTROLS=1` for hosted readers and credential writers.
+Missing control records then refuse access, including after a state directory
+is replaced. Existing standalone behavior remains available for unadopted state;
+saved initialization evidence still prevents recreating a lost adopted record.
+
+Before starting matching control-aware roles, explicitly initialize each reviewed
+account in its existing private state, using the same runtime user and paths:
+
+```sh
+python -m newsclip.connection_controls --initialize --root <user-state-root> --provider <configured-publisher>
+```
+
+This local operation makes no provider request. It preserves existing valid
+controls and refuses a missing record beside retained initialization evidence.
+It must not run automatically to repair a damaged or missing adopted volume.
+Keep markers with current controls, bindings, credentials and accounting; check
+actual mounted state before startup and recover on disposable copies. An older
+backup or an image that ignores controls is not a safe way to clear a disconnect.

@@ -347,8 +347,12 @@ def auth_connect(
         action,
         json_output=json_output,
         human_renderer=lambda value: typer.echo(
-            f"Open this link to sign in:\n{value.url}\n"
-            f"Expires: {value.expires_at.isoformat()}"
+            f"Open Connections and sign in to manage your subscriptions:\n{value.url}\n"
+            + (
+                f"Expires: {value.expires_at.isoformat()}"
+                if value.expires_at
+                else "Only the authenticated owner can start or replace sign-in."
+            )
         ),
     )
 

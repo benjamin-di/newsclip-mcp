@@ -11,7 +11,6 @@ from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from secrets import token_urlsafe
 from typing import Any
@@ -131,15 +130,46 @@ def validate_public_url(value: str) -> str:
 class UserAuth:
     """A URL selects an application; only its user's bearer grants access."""
 
-    def __init__(self, app: Any, user: User, registry_path: Path, origin: str) -> None:
+    def __init__(
+        self,
+        app: Any,
+        user: User,
+        registry_path: Path,
+        origin: str,
+        connections=None,
+        browser_app=None,
+        api_aliases=(),
+    ) -> None:
         self.app, self.user, self.registry_path = app, user, registry_path
+        self.connections = connections
+        self.browser_app = browser_app or app
         parts = urlsplit(origin)
         self.origin, self.host = f"{parts.scheme}://{parts.netloc}", parts.netloc
+        api_parts = [parts, *(urlsplit(value) for value in api_aliases)]
+        self.api_hosts = {value.netloc.encode() for value in api_parts}
+        self.api_origins = {
+            f"{value.scheme}://{value.netloc}".encode() for value in api_parts
+        }
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] == "lifespan":
             await self.app(scope, receive, send)
             return
+        root = scope.get("root_path", "")
+        path = scope["path"]
+        relative = path[len(root) :] if root and path.startswith(root) else path
+        viewer = relative.startswith("/connect/")
+        selected = (
+            urlsplit(self.connections.config.oidc.public_url)
+            if viewer and self.connections
+            else urlsplit(self.origin)
+        )
+        required_hosts = {selected.netloc.encode()} if viewer else self.api_hosts
+        required_origins = (
+            {f"{selected.scheme}://{selected.netloc}".encode()}
+            if viewer
+            else self.api_origins
+        )
         host_headers = [
             value for name, value in scope.get("headers", ()) if name.lower() == b"host"
         ]
@@ -148,8 +178,16 @@ class UserAuth:
             for name, value in scope.get("headers", ())
             if name.lower() == b"origin"
         ]
-        if host_headers != [self.host.encode()] or (
-            origin_headers and origin_headers != [self.origin.encode()]
+        if (
+            len(host_headers) != 1
+            or host_headers[0] not in required_hosts
+            or (
+                origin_headers
+                and (
+                    len(origin_headers) != 1
+                    or origin_headers[0] not in required_origins
+                )
+            )
         ):
             if scope["type"] == "websocket":
                 await send({"type": "websocket.close", "code": 1008})
@@ -160,10 +198,7 @@ class UserAuth:
                     {"detail": "Origin or host refused"}, status_code=403
                 )(scope, receive, send)
             return
-        root = scope.get("root_path", "")
-        path = scope["path"]
-        relative = path[len(root) :] if root and path.startswith(root) else path
-        # A relay link carries its own unguessable, expiring authority.
+        # A link selects an attempt; browser identity supplies its authority.
         try:
             current = next(
                 (
@@ -176,7 +211,31 @@ class UserAuth:
         except (OSError, ValueError):
             current = None
         if current is not None and relative.startswith("/connect/"):
-            await self.app(scope, receive, send)
+            from starlette.requests import HTTPConnection
+            from starlette.responses import RedirectResponse, Response
+
+            owner = (
+                self.connections.user(HTTPConnection(scope))
+                if self.connections
+                else None
+            )
+            if owner != self.user.id:
+                if scope["type"] == "websocket":
+                    await send({"type": "websocket.close", "code": 1008})
+                elif (
+                    owner is None
+                    and scope.get("method") == "GET"
+                    and re.fullmatch(r"/connect/[A-Za-z0-9_-]{32,64}", relative)
+                    and self.connections
+                ):
+                    await RedirectResponse(
+                        self.connections.home + "login", status_code=303
+                    )(scope, receive, send)
+                else:
+                    await Response(status_code=404)(scope, receive, send)
+                return
+            with user_scope(self.user.id):
+                await self.browser_app(scope, receive, send)
             return
         headers = [
             value
@@ -236,6 +295,7 @@ class ProxyUsers:
 
     def __init__(self, app, header: bytes, users: set[str]) -> None:
         self.app, self.header, self.users = app, header, users
+        self.state = app.state
 
     async def __call__(self, scope, receive, send):
         if scope["type"] in {"http", "websocket"} and (
@@ -272,33 +332,76 @@ def build_standalone_app(
     *,
     users_path: Path | None = None,
     public_url: str | None = None,
+    connections_public_url: str | None = None,
+    mcp_public_url_aliases: tuple[str, ...] | None = None,
     login_url: str | None = None,
     login_token: str | None = None,
     service_factory: Callable[[str], NewsclipService] | None = None,
     backend_factory: Callable[[], Any] | None = None,
+    connections_config=None,
+    oidc_transport=None,
 ):
     from anyio import CapacityLimiter
     from signin_window.client import LoginClient
-    from signin_window.page import PageText
-    from signin_window.relay import Relay
     from starlette.applications import Starlette
+    from starlette.middleware import Middleware
     from starlette.requests import Request
     from starlette.responses import JSONResponse
     from starlette.routing import Mount, Route
 
     from .composition import build_mcp_service
+    from .connections import Connections, ConnectionsConfig
 
     registry_path = users_path or Path(os.environ["NEWSCLIP_USERS_FILE"])
     users = load_users(registry_path)
     origin = validate_public_url(
         public_url or os.environ.get("NEWSCLIP_PUBLIC_URL", "http://127.0.0.1:8000")
     )
+    browser_origin = validate_public_url(
+        connections_public_url
+        or (
+            connections_config.oidc.public_url
+            if connections_config
+            else os.environ.get("NEWSCLIP_CONNECTIONS_PUBLIC_URL") or origin
+        )
+    )
+    if connections_config and connections_config.oidc.public_url != browser_origin:
+        raise ValueError("browser public URL and OIDC configuration must agree")
+    aliases = tuple(
+        validate_public_url(value.strip())
+        for value in (
+            mcp_public_url_aliases
+            if mcp_public_url_aliases is not None
+            else os.environ.get("NEWSCLIP_MCP_PUBLIC_URL_ALIASES", "").split(",")
+        )
+        if value.strip()
+    )
+    api_parts = [urlsplit(value) for value in (origin, *aliases)]
+    allowed_api_hosts = list(dict.fromkeys(value.netloc for value in api_parts))
+    allowed_api_origins = list(
+        dict.fromkeys(f"{value.scheme}://{value.netloc}" for value in api_parts)
+    )
+    browser_parts = urlsplit(browser_origin)
+    fixed_browser_origin = f"{browser_parts.scheme}://{browser_parts.netloc}"
+    if fixed_browser_origin != allowed_api_origins[0] and (
+        fixed_browser_origin in allowed_api_origins
+        or (
+            browser_parts.netloc != allowed_api_hosts[0]
+            and browser_parts.netloc in allowed_api_hosts
+        )
+    ):
+        raise ValueError("A separate browser origin cannot be an MCP alias.")
     login_address = login_url or os.environ.get(
         "NEWSCLIP_LOGIN_URL", "http://newsclip-login:8080"
     )
     secret = login_token or read_login_token()
     if len(secret) < 32:
         raise ValueError("login service token must contain at least 32 characters")
+    connections = Connections(
+        connections_config or ConnectionsConfig.from_env(browser_origin),
+        registry_path,
+        transport=oidc_transport,
+    )
     factory = service_factory or (lambda user: build_mcp_service(user=user))
     applications: list[tuple[Any, NewsclipMcp]] = []
     routes: list[Any] = []
@@ -313,35 +416,23 @@ def build_standalone_app(
         backend = (
             backend_factory() if backend_factory else LoginClient(login_address, secret)
         )
-        relay = Relay(
-            backend,
-            f"{origin}/users/{user.id}/connect",
-            text=PageText(service="Newsclip"),
-        )
+        connections.register(user, adapter, backend, browser_origin)
         pagers: OrderedDict[str, Pager] = OrderedDict()
         pager_lock = threading.Lock()
 
         def connection(provider: str) -> ConnectionInfo:
-            selected = adapter._service_ready()._registry.get(provider)
-            if selected.login_recipe is None:
-                raise UsageError("this provider does not require sign-in")
-            link = relay.create(
-                provider,
-                params={"user": user.id, "provider": provider},
-                label=provider.upper(),
-            )
             return ConnectionInfo(
-                url=HttpUrl(link.url),
-                expires_at=datetime.fromisoformat(link.expires_at),
+                url=HttpUrl(connections.request(user.id, provider)),
                 provider=provider,
             )
 
         @server.tool(title="Connect a news subscription")
         async def connect(provider: str) -> McpSuccess[ConnectionInfo]:
-            """Return an expiring link for the person to sign in themselves.
+            """Return the owner's Connections page without changing a connection.
 
             Give the link to the person. Never enter passwords or verification
-            codes. Completion establishes a session, not article entitlement.
+            codes. Only the authenticated owner can start or replace sign-in.
+            Completion establishes a session, not article entitlement.
             Use session_status afterwards, then retry the requested article.
             """
             return _validated_success(
@@ -478,13 +569,15 @@ def build_standalone_app(
                 return JSONResponse({"detail": "Operation failed"}, status_code=500)
             return JSONResponse(value, headers={"Cache-Control": "no-store"})
 
-        parts = urlsplit(origin)
-        host, browser_origin = parts.netloc, f"{parts.scheme}://{parts.netloc}"
-        app = _http_app(server, allowed_hosts=[host], allowed_origins=[browser_origin])
-        app.routes.extend(relay.routes("/connect"))
+        app = _http_app(
+            server, allowed_hosts=allowed_api_hosts, allowed_origins=allowed_api_origins
+        )
+        browser_app = Starlette(routes=connections.viewer_routes(user.id))
         app.routes.append(Route("/api/{operation}", api, methods=["POST"]))
         applications.append((app, adapter))
-        return UserAuth(app, user, registry_path, origin)
+        return UserAuth(
+            app, user, registry_path, origin, connections, browser_app, aliases
+        )
 
     for user in users:
         routes.append(Mount(f"/users/{user.id}", app=make_user_app(user)))
@@ -498,13 +591,21 @@ def build_standalone_app(
             async with AsyncExitStack() as stack:
                 for app, _adapter in applications:
                     await stack.enter_async_context(app.router.lifespan_context(app))
+                for relay in connections.relays.values():
+                    await stack.enter_async_context(relay.lifespan())
                 yield
         finally:
             for _app, adapter in applications:
                 adapter._service_ready().close()
 
     routes.append(Route("/health", health))
-    application = Starlette(routes=routes, lifespan=lifespan)
+    routes.extend(connections.routes())
+    application = Starlette(
+        routes=routes,
+        lifespan=lifespan,
+        middleware=[Middleware(connections.auth.middleware)],
+    )
+    application.state.connections = connections
     proxy_token = os.environ.get("NEWSCLIP_TRUSTED_PROXY_TOKEN", "")
     if proxy_token:
         if len(proxy_token) < 32:

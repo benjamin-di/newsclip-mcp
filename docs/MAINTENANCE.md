@@ -1,7 +1,9 @@
 # Optional session maintenance
 
-Human sign-in is the default. `connect` opens the provider's real page through
-signin-window. Reader APIs cannot submit credentials. Importing a session, or
+Human sign-in uses mandatory owner OIDC authentication. `connect` returns the
+owner's Connections page without starting a window; only the mapped owner's
+explicit action opens the provider's page through signin-window. Reader APIs
+cannot submit credentials. Importing a session, or
 successfully signing in, never proves that an arbitrary article is available:
 Newsclip independently checks its identity, access state and completeness.
 
@@ -93,7 +95,10 @@ never establishes challenge acceptance.
 `NEWSCLIP_MCP_OPS=1` selects a separate operator surface. Supply a dedicated
 `NEWSCLIP_OPS_BEARER_TOKEN`, distinct from every reader/proxy credential. Bind it
 to the private network and restrict the external route to operators. The token
-alone grants repair authority; ordinary reader authorization must not admit it.
+authenticates that separate surface; it does not select another user's account
+or by itself permit credential minting. Account configuration, credential-store
+grants, explicit permission, readiness and budgets still apply. Gateway reader
+grants and browser sign-in never admit an agent to this operator surface.
 
 Set `NEWSCLIP_USER=alice` on an operator instance to select the same account for
 stored health and its CLI children. Stored health, guarded provider checks and
@@ -113,16 +118,22 @@ proxy handles authentication. This creates no additional bearer credential;
 native-token users can coexist in the same registry.
 
 Strip client-supplied copies at the edge, authenticate the person there, then
-inject the dedicated backend credential and identity. Deny direct backend access
+inject the dedicated backend credential and identity only after API admission.
+For Agentgateway, validate the intended audience, requested scopes, explicit
+agent grant and group ceiling before choosing the registered backend user.
+Newsclip does not derive those policies from the proxy token. Deny direct backend access
 from other callers. Missing, duplicate, unknown or mismatched identities fail
 closed; a native user token cannot authorize the proxy header.
 
 `NEWSCLIP_PUBLIC_URL` supports a simple prefix, for example
 `https://reader.example.com/newsclip`. The proxy strips that prefix before
 forwarding. Generated connection URLs retain it; browser Origin checks use the
-bare HTTPS origin. Forward only the exact one-time connection routes and assets
-without edge authentication, and never inject a backend bearer into those links.
-The relay validates their independent, expiring authority.
+bare HTTPS origin. Forward only the documented Connections/viewer routes and
+assets to their mandatory OIDC checks, without injecting a backend bearer.
+The browser identity must map to the same registered user on every new viewer
+admission. Link identifiers are attempt selectors, not independent credentials.
+See [Authentication](AUTHENTICATION.md) for revocation, cleanup and recovery;
+optional maintenance never makes that browser policy optional.
 
 
 The optional recovery watcher is a separately supervised process. Set

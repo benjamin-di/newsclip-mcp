@@ -25,6 +25,13 @@ should model the defect with invented content. Keep publisher-specific behavior
 in its adapter or TOML definition. Shared changes need evidence across each
 distinct affected execution path.
 
+Test browser identity, delegated API admission and provider authority as separate
+boundaries. A valid browser owner must not acquire reader/agent permission by
+signing in, and a reader/proxy token must not start or manage a human attempt.
+The application's synthetic tests cannot certify an operator's gateway grant,
+audience or group-ceiling configuration; that integration needs separate private
+acceptance. The [remaining workplan](../ROADMAP.md) lists release obligations.
+
 ## Public releases
 
 Public CI and release workflows are self-contained. Container images and release

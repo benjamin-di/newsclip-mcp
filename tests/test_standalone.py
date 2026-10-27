@@ -6,6 +6,7 @@ import json
 import stat
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import pytest
@@ -13,10 +14,13 @@ import pytest
 pytest.importorskip("signin_window")
 pytest.importorskip("fastmcp")
 
+from oidc_provider import Provider  # noqa: E402
+from signin_window.oidc import OIDCConfig  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 from test_mcp import FULL_URL, PagedFakeProvider, _service  # noqa: E402
 
 from newsclip.composition import build_mcp_service  # noqa: E402
+from newsclip.connections import ConnectionsConfig  # noqa: E402
 from newsclip.errors import OperatorActionRequiredError  # noqa: E402
 from newsclip.models import (  # noqa: E402
     AccessState,
@@ -96,7 +100,9 @@ class ConnectProvider(PagedFakeProvider):
     login_recipe = SimpleNamespace(provider="fixture")
 
 
-def make_app(accounts, tmp_path):
+def make_app(
+    accounts, tmp_path, *, public_url="http://127.0.0.1", browser_url="http://127.0.0.1"
+):
     registry, tokens = accounts
     backends = []
 
@@ -105,14 +111,44 @@ def make_app(accounts, tmp_path):
         backends.append(value)
         return value
 
+    provider = Provider()
+    provider.tamper = {"person_id": "alice"}
+    config = ConnectionsConfig(
+        OIDCConfig(
+            provider.issuer,
+            "newsclip-ui",
+            browser_url,
+            tmp_path / "browser",
+            required_group="example-users",
+            cookie_name="__Host-newsclip-connections",
+            allow_loopback_http=True,
+        ),
+        "person_id",
+        {},
+    )
+
     app = build_standalone_app(
         users_path=registry,
-        public_url="http://127.0.0.1",
+        public_url=public_url,
         login_token="synthetic-internal-token-at-least-32-characters",
         service_factory=lambda user: _service(tmp_path / user, ConnectProvider()),
         backend_factory=backend,
+        connections_config=config,
+        oidc_transport=provider.transport(),
     )
+    app.state.oidc_provider = provider
     return app, tokens, backends
+
+
+def browser_login(app, client, user="alice", suffix=""):
+    provider = app.state.oidc_provider
+    provider.tamper = {"person_id": user}
+    response = client.get("/connections/login" + suffix, follow_redirects=False)
+    callback = urlsplit(
+        provider.authorize(response.headers["location"], subject="subject-" + user)
+    )
+    result = client.get(callback.path + "?" + callback.query, follow_redirects=False)
+    assert result.status_code == 303
 
 
 def test_tokens_cannot_cross_users_or_select_storage(accounts, tmp_path):
@@ -182,15 +218,33 @@ def test_connection_links_are_isolated_and_do_not_expose_sessions(accounts, tmp_
         ).json()
         assert result["ok"]
         url = result["result"]["url"]
-        assert "/users/alice/connect/" in url
+        assert url.endswith("/connections/#fixture")
+        assert result["result"]["expires_at"] is None
+        assert client.get(url, follow_redirects=False).status_code == 200
+        browser_login(app, client)
+        request = client.post(
+            "/connections/start",
+            data={"provider": "fixture"},
+            headers={"origin": "http://127.0.0.1"},
+            follow_redirects=False,
+        )
+        assert request.status_code == 303
+        url = request.headers["location"]
         page = client.get(url)
         assert page.status_code == 200
         assert page.headers["Cache-Control"] == "no-store"
         assert not any(token in page.text for token in tokens.values())
         assert client.get(url.replace("/alice/", "/bob/")).status_code == 404
-        started = client.post(url + "/start", json={"layout": "desktop"})
+        started = client.post(
+            url + "/start",
+            json={"layout": "desktop"},
+            headers={"origin": "http://127.0.0.1"},
+        )
         assert started.status_code == 200
-        assert backends[0].starts == [{"user": "alice", "provider": "fixture"}]
+        assert backends[0].starts[0]["user"] == "alice"
+        assert backends[0].starts[0]["provider"] == "fixture"
+        assert backends[0].starts[0]["account_key"] == "default"
+        assert len(backends[0].starts[0]["connection_revision"]) == 32
         assert "cookies" not in started.text
 
 
@@ -378,6 +432,18 @@ def test_public_prefix_is_used_in_links_and_origin_is_bare(accounts, tmp_path):
         login_token="synthetic-internal-token-at-least-32-characters",
         service_factory=lambda user: _service(tmp_path / user, ConnectProvider()),
         backend_factory=Backend,
+        connections_config=ConnectionsConfig(
+            OIDCConfig(
+                "https://identity.example.com",
+                "newsclip-ui",
+                "https://reader.example.com/newsclip",
+                tmp_path / "browser",
+                cookie_name="__Host-newsclip-connections",
+                required_group="example-users",
+            ),
+            "person_id",
+            {},
+        ),
     )
     with TestClient(app, base_url="https://reader.example.com") as client:
         headers = {
@@ -389,7 +455,7 @@ def test_public_prefix_is_used_in_links_and_origin_is_bare(accounts, tmp_path):
         )
         assert response.status_code == 200
         assert response.json()["result"]["url"].startswith(
-            "https://reader.example.com/newsclip/users/alice/connect/"
+            "https://reader.example.com/newsclip/connections/#fixture"
         )
         headers["Origin"] += "/newsclip"
         assert (

@@ -88,8 +88,12 @@ def test_remote_cli_uses_shared_search_save_archive_and_connect(
             cli.app, [*common, "auth", "connect", "fixture", "--json"]
         )
         assert connect.exit_code == 0, connect.output
-        assert "/users/alice/connect/" in json.loads(connect.stdout)["url"]
+        assert "/connections/#fixture" in json.loads(connect.stdout)["url"]
+        assert json.loads(connect.stdout)["expires_at"] is None
         assert tokens["alice"] not in connect.stdout
+        human_connect = runner.invoke(cli.app, [*common, "auth", "connect", "fixture"])
+        assert human_connect.exit_code == 0, human_connect.output
+        assert "Only the authenticated owner" in human_connect.stdout
         doctor = runner.invoke(cli.app, [*common, "doctor", "--json"])
         assert doctor.exit_code == 0, doctor.output
         assert json.loads(doctor.stdout)["providers"] == ["fixture"]

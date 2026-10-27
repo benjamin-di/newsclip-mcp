@@ -11,22 +11,31 @@ import contextlib
 import json
 import os
 import socket
+import sys
 import tempfile
 import urllib.request
+from dataclasses import replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import signin_window.browser as window_browser
+import signin_window.hosts as window_hosts
 import uvicorn
 from patchright.async_api import async_playwright
+from pocket_id_acceptance import Identity
 from pydantic import HttpUrl
 from signin_window.browser import policy_installed
+from signin_window.oidc import OIDCConfig
 
 import newsclip.composition as composition
-from newsclip.browser_runtime import PatchrightRuntime
+from newsclip.browser_runtime import BrowserLaunchConfig, PatchrightRuntime
 from newsclip.browser_runtime.surface import ensure_virtual_display
 from newsclip.client import NewsclipClient
+from newsclip.connection_controls import ConnectionControls
+from newsclip.connections import ConnectionsConfig
+from newsclip.errors import SessionRequiredError
 from newsclip.models import RawFetch
 from newsclip.provider_config import ProviderSpec, load_provider_spec
 from newsclip.providers.ft import FTProvider
@@ -43,6 +52,10 @@ ARTICLE_URLS = {
 }
 LOGIN_TOKEN = "synthetic-internal-browser-token-for-offline-testing"
 INPUT = "reader@example.com"
+OFFLINE_ARGS = (
+    "--no-proxy-server",
+    "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1",
+)
 PARAGRAPH = (
     "This generated paragraph describes a fictional research project and its "
     "imaginary timetable. The participants compare invented measurements, "
@@ -70,7 +83,10 @@ FULL = (
 FORM = (
     "<!doctype html><title>Synthetic sign-in</title>"
     '<form action="https://www.example.com/connected">'
-    '<input autofocus name="signal" style="position:fixed;inset:0;width:100%;'
+    '<input autofocus name="signal" '
+    "oninput=\"fetch('https://www.example.com/typed?signal='"
+    '+encodeURIComponent(this.value))" '
+    'style="position:fixed;inset:0;width:100%;'
     'height:100%;font-size:24px"><button type="submit">Continue</button></form>'
 )
 
@@ -154,7 +170,9 @@ async def serve(app, port):
     raise AssertionError("test server did not start")
 
 
-def mcp_link(origin, token, user="alice", provider="ft"):
+def mcp_link(
+    origin, token, user="alice", provider="ft", *, host=None, request_origin=None
+):
     def call(method, params, identifier):
         request = urllib.request.Request(
             origin + f"/users/{user}/mcp",
@@ -168,6 +186,10 @@ def mcp_link(origin, token, user="alice", provider="ft"):
                 "MCP-Protocol-Version": "2025-03-26",
             },
         )
+        if host:
+            request.add_header("Host", host)
+        if request_origin:
+            request.add_header("Origin", request_origin)
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.loads(response.read())
 
@@ -188,7 +210,13 @@ def mcp_link(origin, token, user="alice", provider="ft"):
 
 
 async def main() -> None:
-    assert policy_installed(), "browser policy was not installed in the image"
+    if "--unmanaged" in sys.argv:
+        print(
+            "Local unmanaged acceptance; image policy qualification remains required",
+            flush=True,
+        )
+    else:
+        assert policy_installed(), "browser policy was not installed in the image"
     servers = []
     with tempfile.TemporaryDirectory(prefix="newsclip-e2e-") as directory:
         root = Path(directory)
@@ -201,6 +229,7 @@ async def main() -> None:
         os.environ["NEWSCLIP_LOGIN_TOKEN"] = LOGIN_TOKEN
         os.environ["NEWSCLIP_STATE_HOME"] = str(root / "state")
         os.environ["NEWSCLIP_DATA_HOME"] = str(root / "data")
+        os.environ["NEWSCLIP_CONFIG_HOME"] = str(root / "config")
         specs = {key: synthetic_spec(key) for key in ("ft", "wsj")}
         registry = ProviderRegistry(
             (
@@ -216,6 +245,10 @@ async def main() -> None:
         class InterceptedRuntime(PatchrightRuntime):
             @contextlib.contextmanager
             def open(self, profile, **kwargs):
+                config = kwargs.get("launch_config") or BrowserLaunchConfig()
+                kwargs["launch_config"] = replace(
+                    config, args=(*config.args, *OFFLINE_ARGS)
+                )
                 with super().open(profile, **kwargs) as browser:
 
                     def article_route(route):
@@ -242,8 +275,15 @@ async def main() -> None:
                     yield browser
 
         composition.PatchrightRuntime = InterceptedRuntime
+        # These restrictions belong only to the synthetic acceptance process.
+        # Any request missed by interception must fail without external DNS.
+        window_browser.LAUNCH_ARGS = (*window_browser.LAUNCH_ARGS, "--no-proxy-server")
+        window_hosts.host_resolver_rules = lambda *args: OFFLINE_ARGS[1].split("=", 1)[
+            1
+        ]
 
         submitted = []
+        typed = {}
 
         def configure_context(context, window):
             def route(request_route):
@@ -252,6 +292,11 @@ async def main() -> None:
                     request_route.fulfill(
                         status=200, content_type="text/html", body=FORM
                     )
+                elif parsed.path == "/typed":
+                    typed[window.params["user"], window.params["provider"]] = parse_qs(
+                        parsed.query
+                    ).get("signal", [""])[0]
+                    request_route.fulfill(status=204, body="")
                 elif parsed.path == "/connected":
                     assert parse_qs(parsed.query).get("signal") == [INPUT]
                     submitted.append((window.params["user"], window.params["provider"]))
@@ -286,6 +331,27 @@ async def main() -> None:
 
         login_port, port = free_port(), free_port()
         origin = f"http://127.0.0.1:{port}"
+        browser_origin = f"http://localhost:{port}"
+        identity = Identity()
+        try:
+            await identity.start(browser_origin)
+        except BaseException:
+            await identity.close()
+            raise
+        connections_config = ConnectionsConfig(
+            OIDCConfig(
+                identity.issuer,
+                "newsclip-ui",
+                browser_origin,
+                root / "state" / "connections-browser",
+                cookie_name="__Host-newsclip-connections",
+                required_group="newsclip-users",
+                claim_names=("account_alias",),
+                allow_loopback_http=True,
+            ),
+            "account_alias",
+            {},
+        )
         sign_in = partial(
             human_signin,
             registry=registry,
@@ -313,26 +379,91 @@ async def main() -> None:
                 login_url=f"http://127.0.0.1:{login_port}",
                 login_token=LOGIN_TOKEN,
                 service_factory=lambda user: composition.build_mcp_service(user=user),
+                connections_config=connections_config,
+                mcp_public_url_aliases=("https://api.example.test:8443/newsclip",),
             )
 
         servers.append(await serve(app(), port))
         try:
             async with async_playwright() as playwright:
-                viewer = await playwright.chromium.launch(headless=True)
+                viewer = await playwright.chromium.launch(
+                    headless=True, args=OFFLINE_ARGS
+                )
                 context = await viewer.new_context(
                     viewport={"width": 1280, "height": 900}
                 )
-                await context.grant_permissions(["clipboard-write"], origin=origin)
+                other = await viewer.new_context(viewport={"width": 390, "height": 844})
+                contexts = {"alice": context, "bob": other}
+                owner_pages = {}
+                for number, user in enumerate(("alice", "bob")):
+                    owner_pages[user] = await contexts[user].new_page()
+                    await identity.enroll(
+                        contexts[user],
+                        owner_pages[user],
+                        number,
+                        browser_origin + "/connections/",
+                    )
+                    await contexts[user].grant_permissions(
+                        ["clipboard-write"], origin=browser_origin
+                    )
+                    assert await owner_pages[user].evaluate(
+                        "document.documentElement.scrollWidth <= innerWidth"
+                    )
+                print(
+                    "OK: two Pocket ID passkey users; isolated browser sessions",
+                    flush=True,
+                )
+                bearer = {"authorization": "Bearer " + alice_token}
+                assert (
+                    await context.request.post(
+                        browser_origin + "/users/alice/api/providers",
+                        data={},
+                        headers=bearer,
+                    )
+                ).status == 403
+                assert (
+                    await context.request.post(
+                        origin + "/users/alice/api/providers",
+                        data={},
+                        headers={**bearer, "origin": browser_origin},
+                    )
+                ).status == 403
+                print("OK: browser origin cannot admit native API access", flush=True)
+                for host in (None, "api.example.test:8443"):
+                    legacy = await asyncio.to_thread(
+                        mcp_link,
+                        origin,
+                        alice_token,
+                        host=host,
+                        request_origin="https://api.example.test:8443",
+                    )
+                    assert legacy["expires_at"] is None
+                print("OK: explicit legacy API authority/origin retained", flush=True)
                 for user, token, provider_key in (
                     ("alice", alice_token, "ft"),
                     ("alice", alice_token, "wsj"),
                     ("bob", bob_token, "ft"),
                 ):
+                    controls = ConnectionControls(root / "state/users" / user)
+                    before_request = controls.status(provider_key)
                     link = await asyncio.to_thread(
                         mcp_link, origin, token, user, provider_key
                     )
-                    page = await context.new_page()
+                    assert link["expires_at"] is None
+                    assert link["url"].startswith(browser_origin + "/connections/")
+                    assert controls.status(provider_key) == before_request
+                    page = await contexts[user].new_page()
                     await page.goto(link["url"])
+                    card = page.locator("article").filter(
+                        has=page.get_by_role(
+                            "heading", name=provider_key.upper(), exact=True
+                        )
+                    )
+                    await card.locator("form[action$='/start'] button").click()
+                    await page.wait_for_url("**/users/" + user + "/connect/*")
+                    wrong = contexts["bob" if user == "alice" else "alice"]
+                    assert (await wrong.request.get(page.url)).status == 404
+                    assert (await wrong.request.get(page.url + "/state")).status == 404
                     await page.click("#go")
                     try:
                         element = await page.wait_for_selector("iframe", timeout=30000)
@@ -351,12 +482,22 @@ async def main() -> None:
                         "document.documentElement.classList.contains('noVNC_connected')",
                         timeout=60000,
                     )
-                    await frame.locator("#noVNC_container canvas").click()
+                    await page.bring_to_front()
+                    await frame.locator("#noVNC_transition").wait_for(state="hidden")
+                    await frame.locator("#noVNC_container canvas").click(
+                        position={"x": 20, "y": 20}
+                    )
                     await page.evaluate(
                         "value => navigator.clipboard.writeText(value)", INPUT
                     )
                     await page.keyboard.press("Control+V")
-                    await asyncio.sleep(1.5)
+                    for _ in range(50):
+                        if typed.get((user, provider_key)) == INPUT:
+                            break
+                        await asyncio.sleep(0.1)
+                    assert typed.get((user, provider_key)) == INPUT, (
+                        "clipboard did not reach the synthetic field"
+                    )
                     await page.keyboard.press("Enter")
 
                     def status(user=user, token=token, provider_key=provider_key):
@@ -368,13 +509,21 @@ async def main() -> None:
                         if report.status.value == "verified":
                             break
                         await asyncio.sleep(0.1)
-                    assert report.status.value == "verified", (
-                        "human sign-in did not publish"
-                    )
+                    if report.status.value != "verified":
+                        print("Synthetic submissions:", submitted, flush=True)
+                        print(
+                            "Synthetic window outcomes:",
+                            [
+                                (window.state, window.error)
+                                for window in login.state.windows._windows.values()
+                            ],
+                            flush=True,
+                        )
+                        raise AssertionError("human sign-in did not publish")
                     await page.close(run_before_unload=True)
                 assert submitted == [("alice", "ft"), ("alice", "wsj"), ("bob", "ft")]
 
-                # Closing a new window preserves authority and discards its candidate.
+                # Explicit cancellation preserves accepted authority.
                 def generation():
                     service = composition.build_auth_service(user="alice")
                     try:
@@ -388,9 +537,15 @@ async def main() -> None:
                     cancel_link = await asyncio.to_thread(client.connect, "ft")
                 page = await context.new_page()
                 await page.goto(str(cancel_link.url))
+                card = page.locator("article").filter(
+                    has=page.get_by_role("heading", name="FT", exact=True)
+                )
+                await card.locator("form[action$='/start'] button").click()
+                await page.wait_for_url("**/users/alice/connect/*")
                 await page.click("#go")
                 await page.wait_for_selector("iframe", timeout=30000)
-                await page.close(run_before_unload=True)
+                await page.get_by_role("button", name="Cancel", exact=True).click()
+                await page.close()
                 for _ in range(100):
                     if all(
                         window.state not in ("starting", "waiting", "saving")
@@ -398,56 +553,105 @@ async def main() -> None:
                     ):
                         break
                     await asyncio.sleep(0.1)
-                await viewer.close()
                 with NewsclipClient(origin + "/users/alice", alice_token) as client:
                     preserved = await asyncio.to_thread(client.session_status, "ft")
                 assert previous.last_verified_at == preserved.last_verified_at
                 assert previous_generation == await asyncio.to_thread(generation)
-                assert (
-                    len(
-                        list((root / "state/users/alice/browser-profiles/ft").iterdir())
-                    )
-                    == 1
+                profiles = root / "state/users/alice/browser-profiles/ft"
+                for _ in range(300):
+                    if len(list(profiles.iterdir())) == 1:
+                        break
+                    await asyncio.sleep(0.1)
+                assert len(list(profiles.iterdir())) == 1
+
+                def save_and_check():
+                    with NewsclipClient(origin + "/users/alice", alice_token) as client:
+                        return {
+                            key: client.save(url) for key, url in ARTICLE_URLS.items()
+                        }
+
+                saved = await asyncio.to_thread(save_and_check)
+                assert all(
+                    "generated paragraph" in article.body_markdown
+                    for article in saved.values()
                 )
+                server, task = servers.pop()
+                server.should_exit = True
+                await task
+                servers.append(await serve(app(), port))
 
-            def save_and_check():
-                with NewsclipClient(origin + "/users/alice", alice_token) as client:
-                    return {key: client.save(url) for key, url in ARTICLE_URLS.items()}
+                def after_restart():
+                    with NewsclipClient(origin + "/users/alice", alice_token) as client:
+                        for key, article in saved.items():
+                            report = client.session_status(key)
+                            assert report.status.value == "verified", report.model_dump(
+                                mode="json"
+                            )
+                            assert (
+                                client.archive_get(article.id).body_markdown
+                                == article.body_markdown
+                            )
+                            assert client.get(ARTICLE_URLS[key]).id == article.id
+                    with NewsclipClient(origin + "/users/bob", bob_token) as client:
+                        assert client.archive_search("generated") == []
 
-            saved = await asyncio.to_thread(save_and_check)
-            assert all(
-                "generated paragraph" in article.body_markdown
-                for article in saved.values()
-            )
-            server, task = servers.pop()
-            server.should_exit = True
-            await task
-            servers.append(await serve(app(), port))
+                await asyncio.to_thread(after_restart)
+                assert reader_markers and all(
+                    value == "alice" for value in reader_markers
+                )
+                page = owner_pages["alice"]
+                await page.goto(browser_origin + "/connections/login?reauth=1")
+                await identity.finish_login(page, browser_origin + "/connections/")
+                card = page.locator("article").filter(
+                    has=page.get_by_role("heading", name="FT", exact=True)
+                )
+                await card.get_by_role(
+                    "button", name="Disconnect this subscription"
+                ).click()
+                await card.get_by_text(
+                    "Subscription access is disconnected", exact=False
+                ).wait_for()
 
-            def after_restart():
-                with NewsclipClient(origin + "/users/alice", alice_token) as client:
-                    for key, article in saved.items():
-                        assert client.session_status(key).status.value == "verified"
+                def after_disconnect():
+                    service = composition.build_auth_service(user="alice")
+                    try:
+                        try:
+                            service._sessions.get_valid_session("ft")
+                        except SessionRequiredError:
+                            pass
+                        else:
+                            raise AssertionError(
+                                "a restarted application ignored disconnect"
+                            )
+                        assert service._sessions.get_valid_session("wsj")
+                    finally:
+                        service.close()
+                    with NewsclipClient(origin + "/users/alice", alice_token) as client:
                         assert (
-                            client.archive_get(article.id).body_markdown
-                            == article.body_markdown
+                            client.archive_get(saved["ft"].id).body_markdown
+                            == saved["ft"].body_markdown
                         )
-                        assert client.get(ARTICLE_URLS[key]).id == article.id
-                with NewsclipClient(origin + "/users/bob", bob_token) as client:
-                    assert client.archive_search("generated") == []
+                    with NewsclipClient(origin + "/users/bob", bob_token) as client:
+                        assert client.session_status("ft").status.value == "verified"
 
-            await asyncio.to_thread(after_restart)
-            assert reader_markers and all(value == "alice" for value in reader_markers)
-            print(
-                "OK: HTTP and retained-browser paths; MCP link, noVNC paste, "
-                "human sign-in, paid proof, archive "
-                "and restart reuse; users isolated"
-            )
+                await asyncio.to_thread(after_disconnect)
+                await viewer.close()
+                print(
+                    "OK: owner disconnect survived restart; other subscriptions, "
+                    "user and archive preserved",
+                    flush=True,
+                )
+                print(
+                    "OK: HTTP and retained-browser paths; MCP link, noVNC paste, "
+                    "human sign-in, paid proof, archive "
+                    "and restart reuse; users isolated"
+                )
         finally:
             for server, task in reversed(servers):
                 server.should_exit = True
                 with contextlib.suppress(Exception):
                     await task
+            await identity.close()
 
 
 if __name__ == "__main__":

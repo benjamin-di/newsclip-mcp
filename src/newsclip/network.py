@@ -39,12 +39,14 @@ class ProviderNetworkPolicy:
         *,
         clock: Clock | None = None,
         sleep: Sleeper | None = None,
+        authorize_session: Callable[[SessionArtifact], None] | None = None,
     ) -> None:
         self._http = http
         self._clock = clock or time.monotonic
         self._sleep = sleep or time.sleep
         self._limiters: dict[str, _TokenBucket] = {}
         self._lock = threading.Lock()
+        self._authorize_session = authorize_session
 
     def for_provider(
         self,
@@ -74,6 +76,7 @@ class ProviderNetworkPolicy:
             retry_response=retry_response,
             rate_limit_fallback_seconds=budget.rate_limit_fallback_seconds,
             max_attempts=max_attempts,
+            authorize_session=self._authorize_session,
         )
 
 
@@ -89,6 +92,7 @@ class _PolicyHttpClient:
         retry_response: ResponseRetry | None,
         rate_limit_fallback_seconds: float,
         max_attempts: Literal[1, 2],
+        authorize_session: Callable[[SessionArtifact], None] | None = None,
     ) -> None:
         self._http = http
         self._limiter = limiter
@@ -98,6 +102,7 @@ class _PolicyHttpClient:
         self._retry_response = retry_response
         self._rate_limit_fallback_seconds = rate_limit_fallback_seconds
         self._max_attempts = max_attempts
+        self._authorize_session = authorize_session
 
     def get(
         self,
@@ -109,6 +114,8 @@ class _PolicyHttpClient:
         retry_reason = HttpRetryReason.NONE
         for attempt in range(self._max_attempts):
             self._limiter.acquire()
+            if session is not None and self._authorize_session is not None:
+                self._authorize_session(session)
             try:
                 with http_attempt_context(
                     self._provider,

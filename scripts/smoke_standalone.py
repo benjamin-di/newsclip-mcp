@@ -11,8 +11,10 @@ from pathlib import Path
 
 import httpx
 import uvicorn
+from signin_window.oidc import OIDCConfig
 
 from newsclip.client import NewsclipClient
+from newsclip.connections import ConnectionsConfig
 from newsclip.standalone import build_standalone_app
 from newsclip.tenancy import add_user
 
@@ -37,6 +39,19 @@ async def main() -> None:
             users_path=registry,
             public_url=origin,
             login_token="synthetic-smoke-internal-token-without-any-account",
+            connections_config=ConnectionsConfig(
+                OIDCConfig(
+                    "https://identity.example.com",
+                    "newsclip-ui",
+                    origin,
+                    root / "state" / "connections-browser",
+                    cookie_name="__Host-newsclip-connections",
+                    required_group="newsclip-users",
+                    allow_loopback_http=True,
+                ),
+                "account_alias",
+                {},
+            ),
         )
         server = uvicorn.Server(
             uvicorn.Config(

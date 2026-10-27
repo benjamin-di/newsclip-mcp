@@ -16,6 +16,9 @@ agent instruction file; do not add CLAUDE.md or GEMINI.md.
 - Preserve complete user isolation across authorization, sessions, profiles,
   archive, exports, diagnostics and asynchronous callbacks.
 - Human sign-in uses signin-window and never automates credential submission.
+  Browser management always requires OIDC mapped to the registered user;
+  client tokens and viewer links are not management credentials. Keep durable
+  connection barriers in readers, maintenance and the final session writer.
   Reader tools cannot collect credentials. Optional operator maintenance uses
   explicit account-scoped references, bounded budgets and separate credentials.
   Generic session/challenge mechanics belong in signin-window; news entitlement
