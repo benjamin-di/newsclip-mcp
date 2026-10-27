@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "newsclip"
-version = "0.9.6"
+version = "0.9.7"
 description = "News search, verified subscription reading and private archiving"
 license = "MIT"
 license-files = ["LICENSE", "NOTICE"]

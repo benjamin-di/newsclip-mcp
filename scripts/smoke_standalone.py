@@ -78,9 +78,9 @@ async def main() -> None:
                     assert client.archive_search("synthetic") == []
                     assert client.session_status("ft").status.value == "required"
                     assert client.doctor().browser_ready
-                    assert str(client.connect("ft").url).startswith(
-                        origin + "/users/alice/connect/"
-                    )
+                    link = client.connect("ft")
+                    assert str(link.url) == origin + "/connections/"
+                    assert link.expires_at is None
                 with httpx.Client(base_url=origin) as client:
                     assert client.get("/health").status_code == 200
                     assert (
