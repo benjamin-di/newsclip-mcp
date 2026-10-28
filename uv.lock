@@ -1166,7 +1166,7 @@ wheels = [
 
 [[package]]
 name = "newsclip"
-version = "0.9.8"
+version = "0.9.9"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -1213,7 +1213,7 @@ requires-dist = [
     { name = "patchright", specifier = ">=1.52,<2" },
     { name = "pydantic", specifier = ">=2.11,<3" },
     { name = "rich", specifier = ">=14,<15" },
-    { name = "signin-window", extras = ["automation", "oidc"], specifier = ">=0.4.7,<0.5" },
+    { name = "signin-window", extras = ["automation", "oidc"], specifier = ">=0.4.11,<0.5" },
     { name = "starlette", marker = "extra == 'mcp'", specifier = ">=1.0.1,<2" },
     { name = "trafilatura", specifier = ">=2,<3" },
     { name = "typer", specifier = ">=0.16,<1" },
@@ -1926,16 +1926,16 @@ wheels = [
 
 [[package]]
 name = "signin-window"
-version = "0.4.7"
+version = "0.4.11"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "starlette" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ed/c6/dba033cc57745aa28ed99c510c5ba9b40569efcf0c0d30dedbabc711b07a/signin_window-0.4.7.tar.gz", hash = "sha256:0006cb51598435bdf61c03b72fad997b1b983b451b0f24624af11ac8124973d5", size = 250851, upload-time = "2026-10-26T17:26:39.78Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0a/82/3debd5838322d70dff1842880675d7d35d00f1781d60061a75f91a77ea9b/signin_window-0.4.11.tar.gz", hash = "sha256:005eee6845739b4b62c71d0e6606ba11152602d01388222ceedaab72b0460855", size = 254829, upload-time = "2026-10-28T08:21:12.988Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b4/6c/a7bb721984b57c83c187dffa8931e3f7628db6ce6a35c8c3c9ec3f76672c/signin_window-0.4.7-py3-none-any.whl", hash = "sha256:4af4da647b631f41b816d703042b86e7c7d388a72a96a2e2fda8aefda3f28544", size = 121157, upload-time = "2026-10-26T17:26:38.507Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/ef/a71e592fb78af577bc47756373210cfaf5e70b2fbf7a0f8b16be15fd65ae/signin_window-0.4.11-py3-none-any.whl", hash = "sha256:1b6547f67caa7d2519d8676d06fe84ce4483f7c024220c77e66fdba303d4c5db", size = 122091, upload-time = "2026-10-28T08:21:11.67Z" },
 ]
 
 [package.optional-dependencies]

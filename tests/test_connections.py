@@ -1,5 +1,6 @@
 """OIDC browser ownership and the actual reader/maintenance publication boundary."""
 
+import time
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -81,7 +82,9 @@ def test_verified_browser_owner_is_independent_of_mcp_credentials(accounts, tmp_
     with TestClient(app, base_url="http://127.0.0.1") as client:
         handoff = connection(client, tokens["alice"])
         assert handoff.endswith("/connections/#fixture")
-        assert client.get(handoff, follow_redirects=False).status_code == 200
+        signed_out = client.get(handoff, follow_redirects=False)
+        assert signed_out.status_code == 303
+        assert signed_out.headers["location"] == "/connections/login"
         assert (
             client.post(
                 "/connections/start",
@@ -100,7 +103,8 @@ def test_verified_browser_owner_is_independent_of_mcp_credentials(accounts, tmp_
             == 404
         )
         browser_login(app, client, "alice")
-        assert client.get(url).status_code == 200
+        page = client.get(url)
+        assert page.status_code == 200 and '"autoStart": true' in page.text
         assert client.get("/connections/status").status_code == 200
         assert client.post("/users/alice/api/providers", json={}).status_code == 401
         browser_login(app, client, "bob")
@@ -305,17 +309,30 @@ def test_browser_actions_require_exact_origin_and_own_provider(accounts, tmp_pat
 def test_disconnect_requires_fresh_authentication(accounts, tmp_path):
     app, _, _ = make_app(accounts, tmp_path)
     with TestClient(app, base_url="http://127.0.0.1") as client:
-        browser_login(app, client)
+        # An older identity-provider session is not a fresh confirmation.
+        browser_login(app, client, auth_time=int(time.time()) - 3600)
+        controls = app.state.connections.controls["alice"]
+        revision = controls.status("fixture")["revision"]
         response = client.post(
             "/connections/disconnect",
-            data={"provider": "fixture"},
+            data={"provider": "fixture", "revision": revision},
             headers={"origin": "http://127.0.0.1"},
             follow_redirects=False,
         )
         assert response.status_code == 303 and response.headers["location"].endswith(
             "login?reauth=1"
         )
-        assert app.state.connections.controls["alice"].status("fixture")["phase"] == 0
+        assert controls.status("fixture")["phase"] == 0
+        # A sign-in the provider authenticated just now already is one.
+        browser_login(app, client)
+        response = client.post(
+            "/connections/disconnect",
+            data={"provider": "fixture", "revision": revision},
+            headers={"origin": "http://127.0.0.1"},
+            follow_redirects=False,
+        )
+        # Past the identity check: the outcome is the disconnect's own, not a sign-in.
+        assert "reauth" not in response.headers.get("location", "")
 
 
 def test_viewer_cancel_fences_the_final_writer(accounts, tmp_path):

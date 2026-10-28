@@ -464,7 +464,7 @@ async def main() -> None:
                     wrong = contexts["bob" if user == "alice" else "alice"]
                     assert (await wrong.request.get(page.url)).status == 404
                     assert (await wrong.request.get(page.url + "/state")).status == 404
-                    await page.click("#go")
+                    # Owner-bound: the window opens on its own.
                     try:
                         element = await page.wait_for_selector("iframe", timeout=30000)
                     except Exception:
@@ -542,7 +542,7 @@ async def main() -> None:
                 )
                 await card.locator("form[action$='/start'] button").click()
                 await page.wait_for_url("**/users/alice/connect/*")
-                await page.click("#go")
+                # Owner-bound: the window opens on its own.
                 await page.wait_for_selector("iframe", timeout=30000)
                 await page.get_by_role("button", name="Cancel", exact=True).click()
                 await page.close()

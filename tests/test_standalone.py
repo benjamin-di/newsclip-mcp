@@ -140,9 +140,9 @@ def make_app(
     return app, tokens, backends
 
 
-def browser_login(app, client, user="alice", suffix=""):
+def browser_login(app, client, user="alice", suffix="", **claims):
     provider = app.state.oidc_provider
-    provider.tamper = {"person_id": user}
+    provider.tamper = {"person_id": user, **claims}
     response = client.get("/connections/login" + suffix, follow_redirects=False)
     callback = urlsplit(
         provider.authorize(response.headers["location"], subject="subject-" + user)
@@ -220,7 +220,7 @@ def test_connection_links_are_isolated_and_do_not_expose_sessions(accounts, tmp_
         url = result["result"]["url"]
         assert url.endswith("/connections/#fixture")
         assert result["result"]["expires_at"] is None
-        assert client.get(url, follow_redirects=False).status_code == 200
+        assert client.get(url, follow_redirects=False).status_code == 303  # to sign-in
         browser_login(app, client)
         request = client.post(
             "/connections/start",

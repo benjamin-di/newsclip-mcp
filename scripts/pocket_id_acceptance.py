@@ -206,10 +206,7 @@ class Identity:
         else:
             raise AssertionError("Synthetic passkey enrollment did not finish")
         await context.clear_cookies()
-        await page.goto(home)
-        await page.get_by_role(
-            "link", name="Continue with your identity provider"
-        ).click()
+        await page.goto(home)  # signed out: straight to sign-in
         await self.finish_login(page, home)
         used = await cdp.send(
             "WebAuthn.getCredentials",

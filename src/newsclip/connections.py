@@ -164,6 +164,9 @@ class Connections:
                 ),
                 button="Continue to {label}'s sign-in",
                 reconnect=True,
+                # Every link is bound to the signed-in owner who just pressed Connect
+                # (authorize refuses any other), so the window opens at once.
+                auto_start=True,
                 return_url=self.home,
             ),
             authorize=authorize,
@@ -333,13 +336,7 @@ class Connections:
     async def index(self, request):
         identity = self.auth.identity(request)
         if not identity:
-            return HTMLResponse(
-                self.page(
-                    "<p>Sign in to manage your own subscriptions.</p>"
-                    f'<a href="{self.home}login">'
-                    "Continue with your identity provider</a>"
-                )
-            )
+            return RedirectResponse(self.home + "login", status_code=303)
         user = self.user(request)
         if user is None:
             return Response(
