@@ -1166,7 +1166,7 @@ wheels = [
 
 [[package]]
 name = "newsclip"
-version = "0.9.9"
+version = "0.9.10"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -1213,7 +1213,7 @@ requires-dist = [
     { name = "patchright", specifier = ">=1.52,<2" },
     { name = "pydantic", specifier = ">=2.11,<3" },
     { name = "rich", specifier = ">=14,<15" },
-    { name = "signin-window", extras = ["automation", "oidc"], specifier = ">=0.4.11,<0.5" },
+    { name = "signin-window", extras = ["automation", "oidc"], specifier = ">=0.4.12,<0.5" },
     { name = "starlette", marker = "extra == 'mcp'", specifier = ">=1.0.1,<2" },
     { name = "trafilatura", specifier = ">=2,<3" },
     { name = "typer", specifier = ">=0.16,<1" },
@@ -1926,16 +1926,16 @@ wheels = [
 
 [[package]]
 name = "signin-window"
-version = "0.4.11"
+version = "0.4.12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "starlette" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0a/82/3debd5838322d70dff1842880675d7d35d00f1781d60061a75f91a77ea9b/signin_window-0.4.11.tar.gz", hash = "sha256:005eee6845739b4b62c71d0e6606ba11152602d01388222ceedaab72b0460855", size = 254829, upload-time = "2026-10-28T08:21:12.988Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/56/97/00abbdde47ea7943c08e567eff20a8240960c416b99adf067a7993218739/signin_window-0.4.12.tar.gz", hash = "sha256:8ae343ff2f1d57b1c4df7794f614f4fa4d91fe3704f6cc9f09bd78412393a821", size = 255156, upload-time = "2026-10-29T00:17:39.486Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/ef/a71e592fb78af577bc47756373210cfaf5e70b2fbf7a0f8b16be15fd65ae/signin_window-0.4.11-py3-none-any.whl", hash = "sha256:1b6547f67caa7d2519d8676d06fe84ce4483f7c024220c77e66fdba303d4c5db", size = 122091, upload-time = "2026-10-28T08:21:11.67Z" },
+    { url = "https://files.pythonhosted.org/packages/86/91/51726470c216592445220e1ae748557747ef448c1298af6ad5f12a611ae6/signin_window-0.4.12-py3-none-any.whl", hash = "sha256:d7800efa346bd048d68151be413f38777925aead61fb8643ada84018992385b3", size = 122188, upload-time = "2026-10-29T00:17:37.974Z" },
 ]
 
 [package.optional-dependencies]
