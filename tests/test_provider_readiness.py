@@ -187,3 +187,24 @@ def test_external_planner_needs_no_local_cli(monkeypatch) -> None:
     result = readiness.check_credential_readiness("ft", require_vision=True)
 
     assert result.missing == (LoginRequirement.VISION_CLI,)
+
+
+def test_a_connect_identity_satisfies_the_op_service_requirement(monkeypatch) -> None:
+    """Connect is a reader identity without a service-account token."""
+
+    import newsclip.credential_readiness as readiness
+    from newsclip.models import LoginRequirement
+
+    monkeypatch.delenv("NEWSCLIP_CREDENTIAL_READER", raising=False)
+    monkeypatch.setattr(readiness, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.delenv("OP_SERVICE_ACCOUNT_TOKEN", raising=False)
+    assert (
+        LoginRequirement.OP_SERVICE_TOKEN
+        in readiness.check_credential_readiness("ft").missing
+    )
+    monkeypatch.setenv("OP_CONNECT_HOST", "http://connect.example.com:8080")
+    monkeypatch.setenv("OP_CONNECT_TOKEN", "synthetic-connect")
+    assert (
+        LoginRequirement.OP_SERVICE_TOKEN
+        not in readiness.check_credential_readiness("ft").missing
+    )

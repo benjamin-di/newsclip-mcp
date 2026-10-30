@@ -9,7 +9,7 @@ from pathlib import Path
 from shutil import which
 from typing import TYPE_CHECKING, cast
 
-from signin_window.automation.secrets import load_credential_reader
+from signin_window.automation.secrets import OpSecretReader, load_credential_reader
 
 from .maintenance import credential_reader_factory, planner_configured
 from .models import LoginRequirement, ProviderReadiness
@@ -110,7 +110,8 @@ def check_credential_readiness(
     else:
         if which("op") is None:
             missing.append(LoginRequirement.OP_CLI)
-        if not os.environ.get("OP_SERVICE_ACCOUNT_TOKEN", "").strip():
+        # The reader's own identity: a 1Password Connect server or a service account.
+        if not OpSecretReader().has_token:
             missing.append(LoginRequirement.OP_SERVICE_TOKEN)
     if require_vision and (
         not planner_configured() or os.environ.get("NEWSCLIP_VISION_PLANNER") == "local"

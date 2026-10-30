@@ -7,8 +7,10 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from newsclip.acquisition import MintFailureCategory, MintFailureStage
 from newsclip.cli import app
-from newsclip.maintenance_cycle import run_maintenance_cycle
+from newsclip.maintenance_cycle import ENUMS, project_verdict, run_maintenance_cycle
+from newsclip.sessions import _SAFE_PROBE_FAILURE_REASONS
 
 
 def fresh(args, **kwargs):
@@ -41,6 +43,47 @@ def test_failed_provider_does_not_skip_others_or_disclose_raw_output(tmp_path):
     assert result.results[1]["reason_code"] == "unclassified"
     assert result.results[1]["recovery"]["reason"] == "content_not_full"
     assert "SYNTHETIC_SECRET" not in json.dumps(result.public_dict())
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "reason", "blocker"),
+    [
+        (
+            "credential_secret_delivery_failed",
+            "credential_secret_delivery_failed",
+            "ready",
+        ),
+        ("credential_credential_rejected", "credential_credential_rejected", "ready"),
+        ("paid_probe_http_forbidden", "renewal_failed", "provider_check_required"),
+        ("connection_disconnected", "account_action", "account_action"),
+        ("incident_review_required", "session_cooldown", "session_cooldown"),
+    ],
+)
+def test_keeper_codes_survive_projection(reason_code, reason, blocker):
+    safe = project_verdict(
+        {
+            "reason_code": reason_code,
+            "recovery_blocker": blocker,
+            "recovery": {"status": "failed", "reason": reason},
+        }
+    )
+    assert safe == {
+        "reason_code": reason_code,
+        "recovery_blocker": blocker,
+        "recovery": {"status": "failed", "reason": reason},
+    }
+
+
+def test_every_closed_keeper_code_is_classified_and_free_text_is_not():
+    login = {f"{s}_{c}" for s in MintFailureStage for c in MintFailureCategory}
+    probes = {f"paid_probe_{r}" for r in (*_SAFE_PROBE_FAILURE_REASONS, "unknown")}
+    for key in ("reason", "reason_code"):
+        assert login | probes <= set(ENUMS[key].split())
+    for value in ("credential secret leaked", "user_example_org", "SYNTHETIC_SECRET"):
+        assert project_verdict({"reason_code": value, "recovery_blocker": value}) == {
+            "reason_code": "unclassified",
+            "recovery_blocker": "unclassified",
+        }
 
 
 @pytest.mark.parametrize(

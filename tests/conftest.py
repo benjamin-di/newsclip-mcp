@@ -7,6 +7,13 @@ import pytest
 from newsclip.tenancy import add_user
 
 
+@pytest.fixture(autouse=True)
+def no_inherited_connect_identity(monkeypatch):
+    # Fixtures use only the identity they explicitly configure.
+    monkeypatch.delenv("OP_CONNECT_HOST", raising=False)
+    monkeypatch.delenv("OP_CONNECT_TOKEN", raising=False)
+
+
 @pytest.fixture
 def accounts(tmp_path, monkeypatch):
     monkeypatch.setenv("NEWSCLIP_STATE_HOME", str(tmp_path / "state"))

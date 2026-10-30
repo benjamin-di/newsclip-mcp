@@ -24,10 +24,46 @@ from typing import Literal
 
 from signin_window.state import atomic_private_write, read_private_file
 
-from .errors import PersistenceError
+from .acquisition import MintFailureCategory, MintFailureStage
+from .errors import NOT_ENTITLED_REASON, PersistenceError
 from .process_signals import TIMED_OUT_EXIT_STATUSES, under_timeout
+from .provider_check import ProviderCheckFailure
 from .provider_guard import GuardAction
 from .provider_keys import is_provider_key
+from .results import PublicErrorCategory, PublicErrorReason
+
+#: Fixed tokens the keeper and its recovery record can publish as a reason.
+#: Recovery records a renewal's reason code (or its action) as its reason, so
+#: both fields share them. Each comes from a closed vocabulary: a login's
+#: ``<stage>_<category>``, a paid probe's safe reason, a guard verdict, a
+#: provider-check failure, the shared error category, a connection barrier
+#: and the keeper's own blockers. Anything else is still "unclassified".
+_KEEPER_REASONS = " ".join(
+    (
+        *(
+            f"{stage}_{category}"
+            for stage in MintFailureStage
+            for category in MintFailureCategory
+        ),
+        *(action.value for action in GuardAction),
+        *(failure.value for failure in ProviderCheckFailure),
+        *(category.value for category in PublicErrorCategory),
+        PublicErrorReason.IMPORT_VERIFICATION_INCONCLUSIVE.value,
+        NOT_ENTITLED_REASON,
+        "paid_probe_article_identity_mismatch paid_probe_http_client_error",
+        "paid_probe_http_error paid_probe_http_forbidden paid_probe_http_rate_limited",
+        "paid_probe_http_redirect_error paid_probe_http_server_error",
+        "paid_probe_http_unauthorized paid_probe_insufficient_article_structure",
+        "paid_probe_interactive_challenge paid_probe_invalid_html",
+        "paid_probe_verification_body_too_short paid_probe_unknown",
+        "account_alert browser_session_authority_changed",
+        "connection_disconnected connection_interactive incident_hold_cleared",
+        "session_cooldown credential_mint_not_permitted credential_host_not_ready",
+        "credential_budget_spent session_verification_unresolved",
+        "idle busy fresh renewed held cooldown operator_action_required",
+        "renewal_failed checked check_failed",
+    )
+)
 
 ENUMS = {
     "action": (
@@ -59,6 +95,7 @@ ENUMS = {
         "recovery_unavailable persistence unclassified "
         "unclassified_error idle busy fresh renewed held "
         "operator_action_required renewal_failed checked check_failed "
+        + _KEEPER_REASONS
     ),
     "reason_code": (
         "paid_probe_inconclusive verification_unresolved "
@@ -68,13 +105,13 @@ ENUMS = {
         "read_timeout read_dns read_provider_error content_not_full "
         "account_action provider_defense recovery_state_unreadable "
         "recovery_unavailable persistence unclassified "
-        "unclassified_error "
+        "unclassified_error " + _KEEPER_REASONS
     ),
     "recovery_blocker": (
         "ready review_recovery recovery_budget_spent recovery_backoff "
         "provider_check_required provider_held provider_defense "
         "account_action recovery_worker_failed "
-        "interrupted_reconciliation "
+        "interrupted_reconciliation session_cooldown "
     ),
 }
 
