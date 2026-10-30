@@ -456,7 +456,12 @@ async def main() -> None:
                     await page.goto(link["url"])
                     card = page.locator("article").filter(
                         has=page.get_by_role(
-                            "heading", name=provider_key.upper(), exact=True
+                            "heading",
+                            name={
+                                "ft": "Financial Times",
+                                "wsj": "The Wall Street Journal",
+                            }[provider_key],
+                            exact=True,
                         )
                     )
                     await card.locator("form[action$='/start'] button").click()
@@ -538,13 +543,15 @@ async def main() -> None:
                 page = await context.new_page()
                 await page.goto(str(cancel_link.url))
                 card = page.locator("article").filter(
-                    has=page.get_by_role("heading", name="FT", exact=True)
+                    has=page.get_by_role("heading", name="Financial Times", exact=True)
                 )
                 await card.locator("form[action$='/start'] button").click()
                 await page.wait_for_url("**/users/alice/connect/*")
                 # Owner-bound: the window opens on its own.
                 await page.wait_for_selector("iframe", timeout=30000)
-                await page.get_by_role("button", name="Cancel", exact=True).click()
+                await page.get_by_role(
+                    "button", name="Cancel sign-in", exact=True
+                ).click()
                 await page.close()
                 for _ in range(100):
                     if all(
@@ -603,14 +610,13 @@ async def main() -> None:
                 await page.goto(browser_origin + "/connections/login?reauth=1")
                 await identity.finish_login(page, browser_origin + "/connections/")
                 card = page.locator("article").filter(
-                    has=page.get_by_role("heading", name="FT", exact=True)
+                    has=page.get_by_role("heading", name="Financial Times", exact=True)
                 )
+                await card.locator("details.manage summary").click()
                 await card.get_by_role(
                     "button", name="Disconnect this subscription"
                 ).click()
-                await card.get_by_text(
-                    "Subscription access is disconnected", exact=False
-                ).wait_for()
+                await card.get_by_text("Disconnected", exact=False).wait_for()
 
                 def after_disconnect():
                     service = composition.build_auth_service(user="alice")

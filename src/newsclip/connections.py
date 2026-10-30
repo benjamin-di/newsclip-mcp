@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from signin_window.connections import disconnect_confirmation, timestamp
+from signin_window.connections import page as connection_page
 from signin_window.oidc import BrowserAuth, OIDCConfig
 from signin_window.page import PageText
 from signin_window.relay import AttemptContext, Link, Relay
@@ -22,6 +24,16 @@ from .errors import NewsclipError, UsageError
 from .models import SessionStatus
 from .sessions import ServingSessions, SessionStore
 from .tenancy import application_root, load_users, user_scope
+
+_PUBLISHER_NAMES = {
+    "ft": "Financial Times",
+    "economist": "The Economist",
+    "wsj": "The Wall Street Journal",
+    "nyt": "The New York Times",
+    "bloomberg": "Bloomberg",
+    "reuters": "Reuters",
+    "cnbc": "CNBC",
+}
 
 
 @dataclass(frozen=True)
@@ -218,7 +230,7 @@ class Connections:
                 "account_key": "default",
                 "connection_revision": revision,
             },
-            label=provider.upper(),
+            label=_PUBLISHER_NAMES.get(provider, provider),
             context=AttemptContext(owner=user, target=revision),
         )
         self.links[user, provider] = link
@@ -255,7 +267,7 @@ class Connections:
             if control["phase"] == 2:
                 state, detail = (
                     "disconnecting",
-                    "Access is blocked; retry to finish removing credentials.",
+                    "Access stopped. Finish disconnecting to remove the saved sign-in.",
                 )
             elif (
                 link
@@ -267,34 +279,33 @@ class Connections:
             ):
                 state, detail = (
                     "connecting",
-                    "Continue the same sign-in; closing the page does not cancel "
-                    "saving.",
+                    "Sign-in is in progress. Continue the sign-in you already started.",
                 )
             elif control.get("human_until", 0) > self.clock():
                 state, detail = (
                     "recovering",
-                    "Sign-in may still be finishing after a restart. You can "
-                    "cancel it or start a new attempt.",
+                    "Your sign-in may still be finishing. Check its status, "
+                    "or cancel it before starting again.",
                 )
             elif control["phase"]:
                 state, detail = (
                     "disconnected",
-                    "Subscription access is disconnected from this server.",
+                    "Disconnected. Connect this subscription to use it again.",
                 )
             elif health and health.status is SessionStatus.VERIFIED:
                 state, detail = (
                     "connected",
-                    "A verified connection is saved. Article access is checked "
-                    "separately.",
+                    "Connection saved. Access to each article is checked separately.",
                 )
             else:
                 state, detail = (
                     "needs_signin",
-                    "Connect your own subscription on the publisher's page.",
+                    "Connect the subscription you want to use.",
                 )
             items.append(
                 {
                     "provider": provider,
+                    "name": _PUBLISHER_NAMES.get(provider, provider),
                     "revision": control["revision"],
                     "state": state,
                     "detail": detail,
@@ -306,19 +317,9 @@ class Connections:
             )
         return items
 
-    @staticmethod
-    def page(body):
-        return (
-            "<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport "
-            "content='width=device-width,initial-scale=1'>"
-            "<title>Subscription connections</title>"
-            "<style>body{font:16px system-ui;max-width:42rem;"
-            "margin:2rem auto;padding:0 1rem}article{border:1px solid #ccc;"
-            "border-radius:12px;padding:1rem;margin:1rem 0}button,a{font:inherit}"
-            "button{padding:.7rem 1rem;margin:.5rem 0}p{line-height:1.5}"
-            "a{overflow-wrap:anywhere}</style><main><h1>Subscription connections</h1>"
-            + body
-            + "</main></html>"
+    def page(self, body, *, refresh=False):
+        return connection_page(
+            "News subscriptions", body, refresh=refresh, login_url=self.home + "login"
         )
 
     def form(self, action, provider, text, *, revision=None):
@@ -327,11 +328,29 @@ class Connections:
             if action in ("cancel", "disconnect")
             else ""
         )
-        return (
+        kind = (
+            "danger"
+            if action == "disconnect"
+            else "quiet"
+            if action == "cancel"
+            else "secondary"
+            if text == "Reconnect"
+            else "primary"
+        )
+        form = (
             f'<form method="post" action="{self.home}{action}">'
             '<input type="hidden" name="provider" '
-            f'value="{html.escape(provider)}">{fence}<button>{html.escape(text)}</button></form>'
+            f'value="{html.escape(provider)}">{fence}'
+            f'<button class="{kind}">{html.escape(text)}</button></form>'
         )
+        if action == "disconnect" and text.startswith("Disconnect"):
+            return disconnect_confirmation(
+                form,
+                "this subscription",
+                "This stops this application from using this publisher sign-in. "
+                "It does not cancel your subscription or delete your saved articles.",
+            )
+        return form
 
     async def index(self, request):
         identity = self.auth.identity(request)
@@ -339,8 +358,15 @@ class Connections:
             return RedirectResponse(self.home + "login", status_code=303)
         user = self.user(request)
         if user is None:
-            return Response(
-                "Your identity is not bound to a registered account.", status_code=403
+            return HTMLResponse(
+                self.page(
+                    "<p>This sign-in cannot manage a Newsclip subscription. "
+                    "Sign in with another account, "
+                    "or ask your administrator to check access.</p>"
+                    f'<form method=post action="{self.home}logout">'
+                    "<button class=quiet>Sign out of Connections</button></form>"
+                ),
+                status_code=403,
             )
         statuses = self.statuses(user)
         body = "<p>Signed in as " + html.escape(identity["name"]) + ".</p>"
@@ -348,13 +374,11 @@ class Connections:
             provider, state = status["provider"], status["state"]
             body += (
                 f'<article id="{html.escape(provider)}">'
-                f"<h2>{html.escape(provider.upper())}</h2>"
+                f"<h2>{html.escape(status['name'])}</h2>"
                 f"<p role=status>{html.escape(status['detail'])}</p>"
             )
             if status["last_verified"]:
-                body += (
-                    "<p>Last verified: " + html.escape(status["last_verified"]) + "</p>"
-                )
+                body += timestamp(status["last_verified"])
             if state == "connecting":
                 body += f'<a href="{html.escape(status["url"])}">Continue sign-in</a>'
                 body += self.form(
@@ -369,7 +393,7 @@ class Connections:
                 body += self.form(
                     "disconnect",
                     provider,
-                    "Retry disconnect",
+                    "Finish disconnecting",
                     revision=status["revision"],
                 )
             else:
@@ -387,17 +411,19 @@ class Connections:
                     )
             body += "</article>"
         body += (
-            "<p>Connecting a subscription grants no new agent access. Each article "
-            "still needs its own subscription and full-content checks. "
-            "Disconnecting preserves your private archive.</p>"
+            "<p class=muted>Connecting a subscription does not give an assistant "
+            "permission to use it. Access to each article is checked separately. "
+            "Disconnecting keeps your saved articles.</p>"
             f'<form method="post" action="{self.home}logout">'
-            "<button>Sign out of this page</button></form>"
+            "<button class=quiet>Sign out of Connections</button></form>"
         )
         return HTMLResponse(
-            self.page(body),
-            headers={"Refresh": "2"}
-            if any(item["state"] in ("connecting", "recovering") for item in statuses)
-            else {},
+            self.page(
+                body,
+                refresh=any(
+                    item["state"] in ("connecting", "recovering") for item in statuses
+                ),
+            ),
         )
 
     async def status(self, request):

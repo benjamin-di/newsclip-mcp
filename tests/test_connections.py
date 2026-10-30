@@ -380,7 +380,7 @@ def test_interrupted_attempt_can_be_cancelled_without_in_memory_link(
         controls = portal.controls["alice"]
         revision = controls.status("fixture")["revision"]
         portal.links.clear()
-        assert "Sign-in may still be finishing" in client.get("/connections/").text
+        assert "Your sign-in may still be finishing" in client.get("/connections/").text
         assert (
             client.post(
                 "/connections/cancel",
