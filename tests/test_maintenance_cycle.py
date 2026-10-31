@@ -379,3 +379,34 @@ with cycle.cycle_lease(root) as descriptor:
         if parent.poll() is None:
             parent.kill()
             parent.wait(timeout=3)
+
+
+def test_current_hold_projection_is_closed_and_independent_of_completed_recovery():
+    hold = {
+        "hold_id": "guard-" + "a" * 32,
+        "incident_id": "incident-" + "b" * 24,
+        "action": "incident_review_required",
+        "failure": "content_not_full",
+        "occurred_at": "2026-10-01T00:00:00Z",
+        "last_canary_at": "2026-10-01T01:00:00Z",
+        "next_eligible_canary_at": "2026-10-02T01:00:00Z",
+        "held_operation": "provider_check",
+        "raw": "SYNTHETIC_SECRET",
+    }
+    safe = project_verdict({"current_hold": hold, "recovery": {"status": "succeeded"}})
+    assert safe["current_hold"]["hold_id"] == hold["hold_id"]
+    assert safe["current_hold"]["incident_id"] == hold["incident_id"]
+    assert safe["recovery"]["status"] == "succeeded"
+    assert "SYNTHETIC_SECRET" not in json.dumps(safe)
+    for key in (
+        "action",
+        "failure",
+        "held_operation",
+        "hold_id",
+        "incident_id",
+        "occurred_at",
+    ):
+        assert (
+            project_verdict({"current_hold": {**hold, key: "SYNTHETIC_SECRET"}}) == {}
+        )
+    assert project_verdict({"recovery": {"current_hold": hold}}) == {"recovery": {}}

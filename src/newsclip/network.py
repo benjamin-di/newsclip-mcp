@@ -40,12 +40,21 @@ class ProviderNetworkPolicy:
         clock: Clock | None = None,
         sleep: Sleeper | None = None,
         authorize_session: Callable[[SessionArtifact], None] | None = None,
+        budget_owner: ProviderNetworkPolicy | None = None,
     ) -> None:
         self._http = http
-        self._clock = clock or time.monotonic
-        self._sleep = sleep or time.sleep
-        self._limiters: dict[str, _TokenBucket] = {}
-        self._lock = threading.Lock()
+        self._clock: Clock = (
+            budget_owner._clock if budget_owner else clock or time.monotonic
+        )
+        self._sleep: Sleeper = (
+            budget_owner._sleep if budget_owner else sleep or time.sleep
+        )
+        self._limiters: dict[str, _TokenBucket] = (
+            budget_owner._limiters if budget_owner else {}
+        )
+        self._lock: threading.Lock = (
+            budget_owner._lock if budget_owner else threading.Lock()
+        )
         self._authorize_session = authorize_session
 
     def for_provider(

@@ -11,12 +11,16 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
 from contextvars import copy_context
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
-from typing import Literal, NoReturn, cast
+from typing import TYPE_CHECKING, Literal, NoReturn, cast
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 from curl_cffi.requests import BrowserTypeLiteral
+
+if TYPE_CHECKING:
+    from .subscription_routing import SubscriptionRouting
 
 from .acquisition import (
     ChallengeMode,
@@ -260,6 +264,7 @@ class NewsclipService:
             Callable[[str], AbstractContextManager[HttpClient]] | None
         ) = None,
     ) -> None:
+        self._subscription_routing: SubscriptionRouting | None = None
         self._registry = registry
         self._http = http
         self._extractor = extractor
@@ -553,6 +558,16 @@ class NewsclipService:
             )
 
     def session_status(self, provider_key: str) -> SessionHealth:
+        if self._subscription_routing is not None:
+            reader = self._subscription_routing.reader(provider_key)
+            if reader is not self:
+                return reader.session_status(provider_key).model_copy(
+                    update={
+                        "renewal_incident_id": None,
+                        "renewal_diagnostic_id": None,
+                        "recovery": None,
+                    }
+                )
         self._session_provider(provider_key)
         if self._sessions is None:
             raise PersistenceError("session source is not configured")
@@ -697,6 +712,10 @@ class NewsclipService:
         if not query.strip():
             raise UsageError("search query must not be empty")
         provider = self._registry.get(provider_key)
+        if self._subscription_routing is not None:
+            reader = self._subscription_routing.reader(provider.key)
+            if reader is not self:
+                return reader.search(provider_key, query, filters)
         resolved = filters or SearchFilters()
         with self._timing_operation(TimingOperation.SEARCH, (provider,)):
             results, session = self._search_provider(
@@ -745,6 +764,30 @@ class NewsclipService:
         selected = tuple(self._registry.get(key) for key in selected_keys)
         preflight_errors: dict[str, NewsclipError] = {}
 
+        readers: dict[str, NewsclipService] | None = None
+        validations: list[Callable[[], None]] = []
+        if self._subscription_routing is not None:
+            readers = {}
+            routing = self._subscription_routing
+            for provider in selected:
+                try:
+                    reader, admission = routing.capture(provider.key)
+                    readers[provider.key] = reader
+                    if admission is not None:
+                        validations.append(
+                            partial(routing.access.revalidate, admission)
+                        )
+                        session = reader._search_session_for(provider)
+                        validations.append(
+                            partial(
+                                reader._revalidate_search_session,
+                                provider,
+                                session.generation_id if session else None,
+                            )
+                        )
+                except _SEARCH_FAILURES as error:
+                    preflight_errors[provider.key] = error
+
         if acquire_session is not None:
             for provider in selected:
                 if not provider.capabilities.requires_session_for_search:
@@ -766,6 +809,8 @@ class NewsclipService:
             filters or SearchFilters(),
             selected,
             preflight_errors=preflight_errors,
+            readers=readers,
+            validations=validations,
         )
 
     def provider_check(self, provider_key: str) -> ProviderCheckResult:
@@ -1356,6 +1401,13 @@ class NewsclipService:
             raise
         return page
 
+    def _revalidate_search_session(
+        self, provider: Provider, generation: UUID | None
+    ) -> None:
+        current = self._search_session_for(provider)
+        if (current.generation_id if current else None) != generation:
+            raise SessionRequiredError("account_changed")
+
     def _search_session_for(self, provider: Provider) -> SessionArtifact | None:
         if provider.capabilities.session_kind == "none":
             return None
@@ -1433,6 +1485,10 @@ class NewsclipService:
     ) -> Article:
         request_recovery = request_recovery and acquire_session is None
         provider = self._registry.for_url(url)
+        if self._subscription_routing is not None:
+            reader = self._subscription_routing.reader(provider.key)
+            if reader is not self:
+                return reader.get(url, request_recovery=False)
         with self._timing_operation(TimingOperation.GET, (provider,)):
             try:
                 return self._get_once(provider, url, request_recovery=request_recovery)
@@ -1692,6 +1748,10 @@ class NewsclipService:
         acquire_session: SessionAcquirer | None = None,
     ) -> Article:
         provider = self._registry.for_url(url)
+        if self._subscription_routing is not None:
+            reader = self._subscription_routing.reader(provider.key)
+            if reader is not self:
+                return reader.save(url, out=out)
         with self._timing_operation(TimingOperation.SAVE, (provider,)):
             try:
                 return self._save_once(
@@ -2670,8 +2730,16 @@ class FederatedSearchPager:
         providers: Sequence[Provider],
         *,
         preflight_errors: dict[str, NewsclipError] | None = None,
+        readers: dict[str, NewsclipService] | None = None,
+        validations: Sequence[Callable[[], None]] = (),
     ) -> None:
         self._service = service
+        self._readers = (
+            {provider.key: service for provider in providers}
+            if readers is None
+            else readers
+        )
+        self._validations = validations
         self._query = query
         self._filters = filters
         errors = preflight_errors or {}
@@ -2687,6 +2755,8 @@ class FederatedSearchPager:
         self._emitted_urls: set[str] = set()
 
     def next_batch(self, size: int) -> SearchResponse:
+        for validate in self._validations:
+            validate()
         # Provider pages run in worker threads. A Patchright context retained
         # by an interactive read between batches belongs to the caller thread
         # and must be closed here before search challenge fallback can enter
@@ -2782,7 +2852,7 @@ class FederatedSearchPager:
         ) -> tuple[ProviderSearchPage | None, NewsclipError | None]:
             try:
                 return (
-                    self._service._search_provider_page(
+                    self._readers[state.provider.key]._search_provider_page(
                         state.provider,
                         self._query,
                         self._filters,
@@ -2888,7 +2958,10 @@ class FederatedSearchPager:
     def _source_reports(self) -> tuple[SourceSearchReport, ...]:
         reports: list[SourceSearchReport] = []
         for state in self._states:
-            contained = self._service.defense_contained_until(state.provider.key)
+            reader = self._readers.get(state.provider.key)
+            contained = (
+                reader.defense_contained_until(state.provider.key) if reader else None
+            )
             error = state.terminal_error or state.retryable_error
             if error is not None:
                 reports.append(
@@ -3013,6 +3086,9 @@ def _source_failure_report(
     elif isinstance(error, PersistenceError):
         state = SourceSearchState.UNAVAILABLE
         reason = SourceSearchReason.PERSISTENCE
+    elif isinstance(error, ProviderDefenseError):
+        state = SourceSearchState.UNAVAILABLE
+        reason = SourceSearchReason.PROVIDER_DEFENSE
     elif isinstance(error, ProviderTransportError):
         state = SourceSearchState.UNAVAILABLE
         reason = {

@@ -370,6 +370,7 @@ class SourceSearchReason(StrEnum):
     CONTRACT = "contract"
     PERSISTENCE = "persistence"
     TRANSPORT = "transport"
+    PROVIDER_DEFENSE = "provider_defense"
     # Distinct from TRANSPORT: the route reached the provider and the provider
     # answered. RATE_LIMITED means it asked for less traffic; PROVIDER_ERROR
     # means it refused or failed. Reporting either as TRANSPORT sends an

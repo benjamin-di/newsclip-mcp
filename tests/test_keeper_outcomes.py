@@ -311,6 +311,9 @@ def test_keeper_records_every_verdict(tmp_path: Path) -> None:
     )
 
     class _HeldGuard:
+        def current_hold_health(self, provider: str):
+            return None
+
         def peek(self, provider: str) -> ProviderHold | None:
             return object()  # type: ignore[return-value]
 

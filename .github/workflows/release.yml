@@ -169,7 +169,12 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --generate-notes
+        run: |
+          # The notes are the annotated tag's message: the version's CHANGELOG.md entry (publish-public).
+          object=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq 'select(.object.type == "tag") | .object.sha')
+          test -n "$object" || { echo "::error::$TAG is not an annotated tag carrying release notes"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/git/tags/$object" --jq .message > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
 
   pypi:
     needs: [released, github-release]

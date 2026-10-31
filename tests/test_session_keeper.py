@@ -63,6 +63,9 @@ class FakeGuard:
         del provider
         return self.hold
 
+    def current_hold_health(self, provider: str):
+        return None
+
     def last_check(self, provider: str) -> ProviderCheckObservation | None:
         del provider
         return self.observation
@@ -859,6 +862,9 @@ def test_upkeep_settles_instead_of_renewing_every_cycle(tmp_path: Path) -> None:
     store.explicit_login("ft")
 
     class _NoHolds:
+        def current_hold_health(self, provider: str):
+            return None
+
         def peek(self, provider: str) -> None:
             del provider
             return None
@@ -1935,3 +1941,28 @@ def test_renewal_without_verified_authority_remains_a_failure(tmp_path):
     assert result.needs_attention
     assert outcomes.load("ft").consecutive_renewal_failures == 1
     assert not result.credential_attempt
+
+
+def test_completed_recovery_does_not_hide_current_hold_or_touch_its_budget(tmp_path):
+    from test_provider_guard import _guard_with_clock, _open_incident_hold
+
+    keeper, sessions, recovery_store, _, budget = _recovery_keeper(tmp_path)
+    completed = keeper.keep("ft", allow_credential_mint=False, recovery_only=True)
+    assert completed.recovery.status == "succeeded"
+    guard, guard_store, clock = _guard_with_clock(tmp_path / "guard")
+    held = _open_incident_hold(guard)
+    keeper._guard = guard
+    before = {p.name: p.read_bytes() for p in guard_store.root.glob("*.json")}
+    inspected = keeper.inspect_recovery("ft")
+    payload = inspected.public_dict()
+    assert payload["recovery"]["status"] == "succeeded"
+    assert payload["current_hold"]["hold_id"] == held.hold_id
+    assert payload["current_hold"]["incident_id"] == held.incident_id
+    assert payload["current_hold"]["held_operation"] == "provider_check"
+    assert payload["current_hold"]["last_canary_at"] is None
+    assert inspected.current_hold.next_eligible_canary_at == clock["now"]
+    assert sessions.article_checks == ["https://www.ft.com/content/fixture"]
+    assert sessions.logins == []
+    assert budget.attempts_today("ft") == 0
+    assert before == {p.name: p.read_bytes() for p in guard_store.root.glob("*.json")}
+    assert recovery_store.load("ft").health.status == "succeeded"

@@ -1143,3 +1143,15 @@ def test_only_a_date_bound_withholds_undated_results() -> None:
     assert bounded.excludes_undated(None)
     assert not bounded.excludes_undated(datetime(2026, 6, 1, tzinfo=UTC))
     assert not SearchFilters().excludes_undated(None)
+
+
+def test_provider_defense_survives_federation_and_response_roundtrip():
+    from newsclip.errors import ProviderDefenseError
+    from newsclip.models import SearchResponse
+
+    refused = SearchProvider("refused", error=ProviderDefenseError("private response"))
+    response = _service(refused, SearchProvider("healthy")).search_many("rates")
+    source = SearchResponse.model_validate_json(response.model_dump_json()).sources[0]
+    assert source.reason == "provider_defense"
+    assert source.state is SourceSearchState.UNAVAILABLE
+    assert "private response" not in response.model_dump_json()

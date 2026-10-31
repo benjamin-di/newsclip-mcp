@@ -63,6 +63,7 @@ from .provider_check import (
 )
 from .provider_guard import (
     SESSION_EVIDENCE_ACTIONS,
+    CurrentHoldHealth,
     GuardAction,
     GuardResult,
     ProviderGuardBusyError,
@@ -202,6 +203,7 @@ class KeeperResult(FrozenModel):
     action: KeeperAction
     status: SessionStatus | None = None
     recovery: RecoveryHealth | None = None
+    current_hold: CurrentHoldHealth | None = None
     recovery_blocker: str | None = Field(
         default=None, pattern=r"^[a-z][a-z0-9_]{0,63}$"
     )
@@ -496,6 +498,7 @@ class KeeperResult(FrozenModel):
             name
             for name in (
                 "recovery",
+                "current_hold",
                 "recovery_blocker",
                 "recovery_retry_at",
                 "automatic_recovery_action",
@@ -542,6 +545,8 @@ class _Guard(Protocol):
     """
 
     def peek(self, provider: str) -> ProviderHold | None: ...
+
+    def current_hold_health(self, provider: str) -> CurrentHoldHealth | None: ...
 
     def last_check(self, provider: str) -> ProviderCheckObservation | None: ...
 
@@ -924,6 +929,9 @@ class SessionKeeper:
         }
 
     def _with_recovery(self, provider: str, result: KeeperResult) -> KeeperResult:
+        result = result.model_copy(
+            update={"current_hold": self._guard.current_hold_health(provider)}
+        )
         result = self._with_http_challenges(
             provider, self._with_renewal(provider, result)
         )

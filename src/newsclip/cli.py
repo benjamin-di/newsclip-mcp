@@ -1622,6 +1622,7 @@ def _render_search_response(
                 SourceSearchReason.CONTRACT: "provider response changed",
                 SourceSearchReason.PERSISTENCE: "local state error",
                 SourceSearchReason.TRANSPORT: "connection failed",
+                SourceSearchReason.PROVIDER_DEFENSE: "publisher challenge or cooldown",
                 SourceSearchReason.RATE_LIMITED: "provider rate-limited us",
                 SourceSearchReason.PROVIDER_ERROR: "provider refused the request",
                 SourceSearchReason.UNSEARCHABLE_QUERY: (
@@ -1997,6 +1998,18 @@ def _render_keeper_result(result: KeeperResult) -> None:
         typer.echo("Credential attempt: yes")
     if result.reason_code is not None:
         typer.echo(f"Reason: {result.reason_code}")
+    if result.current_hold is not None:
+        hold = result.current_hold
+        typer.echo(f"Current hold: {hold.hold_id} ({hold.action.value})")
+        typer.echo(f"Held operation: {hold.held_operation}; {hold.failure.value}")
+        if hold.incident_id is not None:
+            typer.echo(f"Hold incident: {hold.incident_id}")
+        if hold.last_canary_at is not None:
+            typer.echo(f"Last canary: {hold.last_canary_at.isoformat()}")
+        if hold.next_eligible_canary_at is not None:
+            typer.echo(
+                f"Next eligible canary: {hold.next_eligible_canary_at.isoformat()}"
+            )
     if result.diagnostic_id is not None:
         typer.echo(f"Diagnostic: {result.diagnostic_id}")
 

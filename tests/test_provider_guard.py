@@ -1603,3 +1603,38 @@ def test_suppressed_incident_canary_preserves_last_actual_page_observation(tmp_p
     result = guard.run_incident_review_canary("ft", lambda: suppressed)
     assert result.action is GuardAction.INCIDENT_REVIEW_REQUIRED
     assert guard.last_check("ft") == previous
+
+
+def test_current_hold_diagnostics_preserve_source_incident_and_canary_budget(tmp_path):
+    guard, store, clock = _guard_with_clock(tmp_path)
+    opened = _open_incident_hold(guard)
+    original = guard.peek("ft")
+    clock["now"] = NOW + timedelta(hours=1)
+    latest_incident = "incident-" + "b" * 24
+    guard.run_incident_review_canary("ft", lambda: _incident_check(latest_incident))
+    before = {p.name: p.read_bytes() for p in store.root.glob("*.json")}
+    with store.locked("ft"):
+        health = guard.current_hold_health("ft")
+    assert health.hold_id == opened.hold_id
+    assert health.incident_id == original.incident_id
+    assert health.incident_id != latest_incident
+    assert health.held_operation == "provider_check"
+    assert health.last_canary_at == clock["now"]
+    assert health.next_eligible_canary_at == NOW + timedelta(hours=25)
+    assert before == {p.name: p.read_bytes() for p in store.root.glob("*.json")}
+    assert guard.peek("ft") == original
+    clock["now"] = NOW + timedelta(hours=25)
+    assert guard.current_hold_health("ft").next_eligible_canary_at == clock["now"]
+    guard.run_incident_review_canary("ft", lambda: _check(failure=None))
+    assert guard.current_hold_health("ft") is None
+
+
+def test_current_hold_diagnostics_fail_on_corrupt_cadence_and_isolate_users(tmp_path):
+    alice, store, _ = _guard_with_clock(tmp_path / "alice")
+    bob, _, _ = _guard_with_clock(tmp_path / "bob")
+    _open_incident_hold(alice)
+    assert alice.current_hold_health("ft") is not None
+    assert bob.current_hold_health("ft") is None
+    (store.root / "ft.incident-canary.json").write_bytes(b"not-json")
+    with pytest.raises(ProviderGuardPersistenceError):
+        alice.current_hold_health("ft")

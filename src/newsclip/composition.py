@@ -90,7 +90,13 @@ from .recovery import RecoveryStore
 from .service import NewsclipService
 from .session_keeper import CredentialBudget, KeeperPolicy, SessionKeeper
 from .sessions import ServingSessions, SessionStore
-from .tenancy import application_root, scope_path, user_scope
+from .tenancy import (
+    application_root,
+    current_user,
+    require_user,
+    scope_path,
+    user_scope,
+)
 from .timing import (
     TimingRecorder,
     TimingRunMode,
@@ -151,6 +157,28 @@ def build_mcp_service(*, user: str | None = None) -> NewsclipService:
             include_archive=True,
             retain_browser_profile=False,
             include_acquisition=False,
+        )
+
+
+def build_connection_reader(
+    *, requester: str, owner: str, budget_owner: ProviderNetworkPolicy
+) -> NewsclipService:
+    """An internal reader with owner-native authority and requester-private output.
+
+    The host must authorize a specific publisher before admitting an operation.
+    This constructor supplies no acquisition collaborators or sharing authority.
+    """
+    from .tenancy import require_user
+
+    require_user(requester)
+    require_user(owner)
+    with user_scope(owner):
+        return _build_service(
+            include_archive=True,
+            retain_browser_profile=False,
+            include_acquisition=False,
+            requester=requester,
+            network_budget_owner=budget_owner,
         )
 
 
@@ -228,12 +256,18 @@ def build_session_keeper(
     )
 
 
-def build_defense_state() -> DefenseState:
+def build_defense_state(
+    *, incident_root: Path | None = None, incident_owner: str | None = None
+) -> DefenseState:
     """The shared per-provider defense containment store."""
 
     state_root = _application_root("NEWSCLIP_STATE_HOME", ".local/state")
     return DefenseState(
-        state_root / "provider-defense", incident_root=state_root / "incidents"
+        state_root / "provider-defense",
+        incident_root=incident_root
+        if incident_root is not None
+        else state_root / "incidents",
+        incident_owner=incident_owner,
     )
 
 
@@ -282,6 +316,8 @@ def _build_service(
     include_archive: bool,
     retain_browser_profile: bool,
     include_acquisition: bool,
+    requester: str | None = None,
+    network_budget_owner: ProviderNetworkPolicy | None = None,
 ) -> NewsclipService:
     with ExitStack() as rollback:
         service = _compose_service(
@@ -289,6 +325,8 @@ def _build_service(
             retain_browser_profile=retain_browser_profile,
             include_acquisition=include_acquisition,
             rollback=rollback,
+            requester=requester,
+            network_budget_owner=network_budget_owner,
         )
         # The completed service owns its transports from this point onward.
         rollback.pop_all()
@@ -307,6 +345,8 @@ def _compose_service(
     retain_browser_profile: bool,
     include_acquisition: bool,
     rollback: ExitStack,
+    requester: str | None = None,
+    network_budget_owner: ProviderNetworkPolicy | None = None,
 ) -> NewsclipService:
     registry = build_registry()
     enabled_keys = set(registry.keys())
@@ -317,8 +357,16 @@ def _compose_service(
     }
     extractor = TrafilaturaExtractor()
     state_root = _application_root("NEWSCLIP_STATE_HOME", ".local/state")
-    timing_root = _timing_root(state_root)
-    trace_root = _trace_root(state_root)
+    with user_scope(requester) if requester is not None else nullcontext():
+        request_root = _application_root("NEWSCLIP_STATE_HOME", ".local/state")
+        timing_root = _timing_root(request_root)
+        trace_root = _trace_root(request_root)
+        data_root = _application_root("NEWSCLIP_DATA_HOME", ".local/share")
+        request_actor = current_user()
+    with user_scope(None):
+        user_state_root = (
+            _application_root("NEWSCLIP_STATE_HOME", ".local/state") / "users"
+        )
     build_identity = resolve_build_identity(Path(__file__).resolve().parents[2])
     # Every process using the configured state tree must share one lease
     # authority. In production the MCP and maintenance processes mount the
@@ -393,7 +441,9 @@ def _compose_service(
     def authorize_session(artifact: SessionArtifact) -> None:
         connection_controls.require_active(artifact.provider, artifact.account_key)
 
-    network = ProviderNetworkPolicy(http, authorize_session=authorize_session)
+    network = ProviderNetworkPolicy(
+        http, authorize_session=authorize_session, budget_owner=network_budget_owner
+    )
     budgets = {provider.key: provider.rate_budget() for provider in registry}
     browser_retriever: PatchrightBrowserRetriever | None = None
     if browser_providers:
@@ -654,7 +704,6 @@ def _compose_service(
     )
     archive = None
     if include_archive:
-        data_root = _application_root("NEWSCLIP_DATA_HOME", ".local/share")
         archive = ArchiveStore(
             data_root / "archive.sqlite3", registry=registry, extractor=extractor
         )
@@ -675,10 +724,15 @@ def _compose_service(
             build_identity=build_identity,
         ),
         incidents=IncidentStore(
-            state_root / "incidents",
+            request_root / "incidents",
             build_identity=build_identity,
-            protected_incidents=lambda provider: _protected_incidents(
-                state_root, provider, build_identity
+            protected_incidents=lambda provider: (
+                _protected_incidents(request_root, provider, build_identity)
+                | (
+                    _shared_defense_incidents(user_state_root, provider, request_actor)
+                    if request_actor is not None
+                    else frozenset()
+                )
             ),
             evidence_root=(
                 trace_root / "incidents"
@@ -689,8 +743,12 @@ def _compose_service(
         keeper_outcomes=KeeperOutcomeStore(
             state_root / "session-keeper", incident_root=state_root / "incidents"
         ),
-        recovery_store=RecoveryStore(state_root / "recovery"),
-        defense=build_defense_state(),
+        recovery_store=RecoveryStore(state_root / "recovery")
+        if requester is None
+        else None,
+        defense=build_defense_state(
+            incident_root=request_root / "incidents", incident_owner=requester
+        ),
         # Session-evidence holds clear on the verification event itself
         # (ARCHITECTURE, "Session upkeep"). Guard construction is deferred to the rare
         # verification moment rather than paid on every service build.
@@ -828,6 +886,30 @@ def _browser_launch_config(spec: ProviderSpec) -> BrowserLaunchConfig:
         accept_language=auth.launch.accept_language,
         args=auth.launch.args,
     )
+
+
+def _shared_defense_incidents(
+    user_state_root: Path, provider: str, requester: str
+) -> frozenset[str]:
+    """Retain this requester's evidence through any native incident-store instance.
+
+    Discovery only prevents deletion; it never authorizes access. Retained users
+    count too, so removing application membership cannot discard open evidence.
+    Unreadable records stop pruning through IncidentStore's existing boundary.
+    """
+    if not user_state_root.exists():
+        return frozenset()
+    protected = set()
+    for owner_root in user_state_root.iterdir():
+        require_user(owner_root.name)
+        if owner_root.is_symlink() or not owner_root.is_dir():
+            raise ValueError("unexpected user state directory")
+        record = DefenseState(
+            owner_root / "provider-defense", incident_owner=requester
+        ).status(provider)
+        if record and record.incident_id:
+            protected.add(record.incident_id)
+    return frozenset(protected)
 
 
 def _protected_incidents(state_root: Path, provider: str, identity) -> frozenset[str]:

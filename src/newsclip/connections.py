@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+from account_connections.ui import Offer, action_form, selection_controls
 from signin_window.connections import disconnect_confirmation, timestamp
 from signin_window.connections import page as connection_page
 from signin_window.oidc import BrowserAuth, OIDCConfig
@@ -23,6 +24,7 @@ from .connection_controls import ConnectionControls
 from .errors import NewsclipError, UsageError
 from .models import SessionStatus
 from .sessions import ServingSessions, SessionStore
+from .subscription_access import SubscriptionAccess
 from .tenancy import application_root, load_users, user_scope
 
 _PUBLISHER_NAMES = {
@@ -112,6 +114,7 @@ class Connections:
         self.auth = BrowserAuth(config.oidc, transport=transport, clock=clock)
         self.home = urlsplit(config.oidc.public_url).path.rstrip("/") + "/connections/"
         self.relays, self.adapters, self.controls, self.links = {}, {}, {}, {}
+        self.access: SubscriptionAccess | None = None
 
     def user(self, request):
         identity = self.auth.identity(request)
@@ -348,7 +351,9 @@ class Connections:
                 form,
                 "this subscription",
                 "This stops this application from using this publisher sign-in. "
-                "It does not cancel your subscription or delete your saved articles.",
+                "This also stops people using your shared sign-in until you reconnect. "
+                "It does not cancel your subscription "
+                "or delete anyone's saved articles.",
             )
         return form
 
@@ -409,6 +414,15 @@ class Connections:
                         "Disconnect this subscription",
                         revision=status["revision"],
                     )
+            if self.access is not None:
+                try:
+                    body += self.sharing_body(user, provider, status)
+                except (NewsclipError, OSError, ValueError):
+                    body += (
+                        '<p role="alert">Sharing controls are unavailable. '
+                        "Ask the administrator to recover this record. "
+                        "Your own connection controls above remain available.</p>"
+                    )
             body += "</article>"
         body += (
             "<p class=muted>Connecting a subscription does not give an assistant "
@@ -425,6 +439,196 @@ class Connections:
                 ),
             ),
         )
+
+    def sharing_body(self, user, provider, status):
+        assert self.access is not None
+        row, offered, unavailable = self.access.view(user, provider)
+        selected = row["selection"]
+        summary = (
+            "Using my subscription."
+            if selected and selected["owner"] == user
+            else f"Using {selected['owner']}'s subscription."
+            if selected
+            else "No subscription selected. Choose below to continue."
+        )
+        if selected and selected["owner"] != user:
+            try:
+                self.access.admit(user, provider)
+            except NewsclipError:
+                summary = (
+                    "The selected shared access was removed or changed. Choose below."
+                )
+        choices = []
+        if not selected or selected["owner"] != user:
+            choices.append(
+                Offer(
+                    "My subscription",
+                    self.home + "choose",
+                    {
+                        "provider": provider,
+                        "owner": user,
+                        "selection_revision": row["revision"],
+                        "grant": "own",
+                    },
+                    "Use my subscription",
+                )
+            )
+        for owner, grant in offered:
+            if selected != {"owner": owner, "grant": grant}:
+                choices.append(
+                    Offer(
+                        owner + "'s subscription",
+                        self.home + "choose",
+                        {
+                            "provider": provider,
+                            "owner": owner,
+                            "selection_revision": row["revision"],
+                            "grant": grant,
+                        },
+                        "Use this subscription",
+                        "Read with their subscription; "
+                        "save articles privately to your own archive.",
+                    )
+                )
+        body = selection_controls(summary, choices)
+        for owner, grant in offered:
+            body += action_form(
+                self.home + "leave",
+                {"provider": provider, "owner": owner, "grant": grant},
+                "Leave " + owner + "'s shared subscription"
+                if selected and selected["owner"] == owner
+                else "Decline access from " + owner,
+            )
+        if unavailable:
+            body += (
+                '<p role="alert">Some shared offers are unavailable. '
+                "Other controls remain usable.</p>"
+            )
+        body += (
+            "<details><summary>Shared with</summary><p>Share your own publisher "
+            "sign-in with an existing user. They choose when to use it and cannot "
+            "reconnect, disconnect or share it further. Activity may appear in the "
+            "publisher account. Stopping sharing keeps articles they already saved.</p>"
+        )
+        members = self.access.users() - {user}
+        for member in sorted(members | row["grants"].keys()):
+            grant = row["grants"].get(member)
+            body += "<p>" + html.escape(member) + "</p>"
+            if grant:
+                body += action_form(
+                    self.home + "unshare",
+                    {"provider": provider, "member": member, "grant": grant},
+                    "Stop sharing",
+                    danger=True,
+                )
+            elif status["state"] == "connected":
+                body += action_form(
+                    self.home + "share",
+                    {
+                        "provider": provider,
+                        "member": member,
+                        "grant": "new",
+                        "revision": status["revision"],
+                    },
+                    "Share my subscription",
+                )
+        if not members:
+            body += "<p>No other registered users are available.</p>"
+        return body + "</details>"
+
+    async def sharing_action(self, request):
+        user = self.user(request)
+        if user is None:
+            return Response(status_code=401)
+        if not self.auth.origin_ok(request):
+            return Response(status_code=403)
+        if self.access is None:
+            return Response(status_code=503)
+        action = request.url.path.rsplit("/", 1)[1]
+        payload = bytearray()
+        async for chunk in request.stream():
+            payload.extend(chunk)
+            if len(payload) > 4096:
+                return Response(status_code=413)
+        expected = {
+            "choose": {"provider", "owner", "selection_revision", "grant"},
+            "share": {"provider", "member", "grant", "revision"},
+            "unshare": {"provider", "member", "grant"},
+            "leave": {"provider", "owner", "grant"},
+        }
+        try:
+            if (
+                request.headers.get("content-type", "").split(";", 1)[0]
+                != "application/x-www-form-urlencoded"
+            ):
+                raise ValueError("form required")
+            parsed = parse_qs(payload.decode(), strict_parsing=True, max_num_fields=4)
+            if set(parsed) != expected[action] or any(
+                len(v) != 1 or not v[0] for v in parsed.values()
+            ):
+                raise ValueError("invalid fields")
+            values = {key: value[0] for key, value in parsed.items()}
+            provider = values["provider"]
+            selected = self.adapters[user]._service_ready()._registry.get(provider)
+            if selected.login_recipe is None:
+                raise ValueError("publisher needs no connection")
+        except (ValueError, UnicodeError, NewsclipError):
+            return Response(status_code=400)
+        if action == "share":
+            identity = self.auth.identity(request)
+            fresh = identity.get("reauthenticated_at") if identity else None
+            if (
+                not isinstance(fresh, int | float)
+                or not 0 <= self.clock() - fresh <= 300
+            ):
+                return RedirectResponse(self.home + "login?reauth=1", status_code=303)
+        access = self.access
+
+        def apply():
+            if action == "choose":
+                access.choose(
+                    user,
+                    provider,
+                    values["owner"],
+                    values["selection_revision"],
+                    None if values["grant"] == "own" else values["grant"],
+                )
+            elif action == "share":
+                if (
+                    self.controls[user].status(provider)["revision"]
+                    != values["revision"]
+                ):
+                    raise UsageError("connection changed")
+                store = self._store(user)
+                if store is None:
+                    raise UsageError("session storage unavailable")
+                store.get_valid_session(provider)
+                access.share(
+                    user,
+                    provider,
+                    values["member"],
+                    None if values["grant"] == "new" else values["grant"],
+                )
+            elif action == "unshare":
+                access.revoke(user, provider, values["member"], values["grant"])
+            else:
+                access.revoke(
+                    values["owner"], provider, user, values["grant"], leaving=True
+                )
+
+        try:
+            await self.adapters[user].dispatcher.run(apply)
+        except (NewsclipError, OSError, ValueError):
+            return HTMLResponse(
+                self.page(
+                    '<p role="alert">Access changed or this action could not finish. '
+                    "Return to Connections to check the current selection "
+                    "and try again.</p>"
+                    f'<a href="{self.home}">Back to Connections</a>'
+                ),
+                status_code=409,
+            )
+        return RedirectResponse(self.home, status_code=303)
 
     async def status(self, request):
         user = self.user(request)
@@ -522,6 +726,10 @@ class Connections:
             Route("/connections/", self.index),
             Route("/connections/status", self.status),
             *self.auth.routes(),
+            *(
+                Route("/connections/" + action, self.sharing_action, methods=["POST"])
+                for action in ("choose", "share", "unshare", "leave")
+            ),
             *(
                 Route("/connections/" + action, self.action, methods=["POST"])
                 for action in ("start", "cancel", "disconnect")

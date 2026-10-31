@@ -38,6 +38,9 @@ INCONCLUSIVE_REASON = MintFailureEvidence(
 
 
 class _NoGuard:
+    def current_hold_health(self, provider: str):
+        return None
+
     def peek(self, provider: str) -> None:
         return None
 

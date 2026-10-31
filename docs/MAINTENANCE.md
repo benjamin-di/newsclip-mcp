@@ -177,3 +177,18 @@ Without this setting, existing `op://` references use 1Password unchanged.
 A custom backend does not require the `op` executable or service-account token.
 Origin checks and error redaction apply to every backend, and a failed selected
 backend never falls back to another credential identity.
+
+
+Keeper JSON and account-scoped health inspection expose `current_hold` separately
+from `recovery`, which can describe an older completed article recovery. The
+projection identifies the exact hold and its source incident, failure class,
+creation time and held operation (`provider_check`, the scheduled search/retrieval
+sequence). `last_canary_at` records the last incident-canary reservation, including
+an interrupted attempt; it does not certify a completed check. For an incident
+review hold, `next_eligible_canary_at` is the earliest permitted time (the inspection
+time if already eligible); other holds have no permitted canary. This is advisory:
+normal scheduling and the guard's locked budget/barrier checks still govern
+actual dispatch and evidence-driven clearing. Inspecting these fields makes no
+publisher request and does not change holds, journals or budgets. Hold and incident
+references remain private to their account and are excluded from another user's
+subscription diagnostics.

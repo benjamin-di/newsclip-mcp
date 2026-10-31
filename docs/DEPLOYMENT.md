@@ -122,3 +122,13 @@ links point at an unreachable host. A 401 usually means the user URL and token
 do not match, or a token was rotated. A publisher challenge requires the person
 or a later attempt from a suitable network; repeating credential submissions is
 not a repair. `not_entitled` requires different subscription access, not renewal.
+
+## Adopting shared subscriptions
+
+Keep `subscription-access/` and `.subscription-access-adopted` in the persistent
+application state root alongside user state. Forward the authenticated browser POST
+routes `connections/choose`, `connections/share`, `connections/unshare` and
+`connections/leave` under the existing public-origin policy. These routes accept no
+API bearer as browser authority. Sharing requires fresh browser authentication;
+selection is a single ordinary form submission. See [state recovery](SHARING.md#storage-and-recovery)
+before upgrading or selecting a rollback image.

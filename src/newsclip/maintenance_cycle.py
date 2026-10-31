@@ -22,13 +22,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from pydantic import ValidationError
 from signin_window.state import atomic_private_write, read_private_file
 
 from .acquisition import MintFailureCategory, MintFailureStage
 from .errors import NOT_ENTITLED_REASON, PersistenceError
 from .process_signals import TIMED_OUT_EXIT_STATUSES, under_timeout
 from .provider_check import ProviderCheckFailure
-from .provider_guard import GuardAction
+from .provider_guard import CurrentHoldHealth, GuardAction
 from .provider_keys import is_provider_key
 from .results import PublicErrorCategory, PublicErrorReason
 
@@ -165,6 +166,18 @@ def project_verdict(data, recovery=False):
             safe[key] = value
         elif key == "recovery" and not recovery and isinstance(value, dict):
             safe[key] = project_verdict(value, recovery=True)
+        elif key == "current_hold" and not recovery and isinstance(value, dict):
+            try:
+                hold = CurrentHoldHealth.model_validate(
+                    {
+                        k: v
+                        for k, v in value.items()
+                        if k in CurrentHoldHealth.model_fields
+                    }
+                )
+            except ValidationError:
+                continue
+            safe[key] = hold.model_dump(mode="json")
     return safe
 
 

@@ -35,7 +35,7 @@ from .models import (
 )
 from .results import public_error
 from .service import FederatedSearchPager, NewsclipService
-from .tenancy import User, load_users, require_user, user_scope
+from .tenancy import User, application_root, load_users, require_user, user_scope
 
 
 class Payload(BaseModel):
@@ -402,6 +402,15 @@ def build_standalone_app(
         registry_path,
         transport=oidc_transport,
     )
+    from .subscription_access import SubscriptionAccess
+    from .subscription_routing import SubscriptionRouting
+
+    with user_scope(None):
+        access = SubscriptionAccess(
+            application_root("NEWSCLIP_STATE_HOME", ".local/state"), registry_path
+        )
+    connections.access = access
+    routers = []
     factory = service_factory or (lambda user: build_mcp_service(user=user))
     applications: list[tuple[Any, NewsclipMcp]] = []
     routes: list[Any] = []
@@ -582,6 +591,23 @@ def build_standalone_app(
     for user in users:
         routes.append(Mount(f"/users/{user.id}", app=make_user_app(user)))
 
+    # Every registered service is built before shared readers can resolve an owner.
+    services = {
+        user.id: adapter._service_ready()
+        for user, (_app, adapter) in zip(users, applications, strict=True)
+    }
+    access.bootstrap(
+        {
+            provider.key
+            for service in services.values()
+            for provider in service._registry
+        }
+    )
+    for actor, service in services.items():
+        routing = SubscriptionRouting(actor, service, access, services.__getitem__)
+        service._subscription_routing = routing
+        routers.append(routing)
+
     async def health(_request: Request):
         return JSONResponse({"status": "ok", "service": "newsclip"})
 
@@ -595,6 +621,8 @@ def build_standalone_app(
                     await stack.enter_async_context(relay.lifespan())
                 yield
         finally:
+            for routing in routers:
+                routing.close()
             for _app, adapter in applications:
                 adapter._service_ready().close()
 

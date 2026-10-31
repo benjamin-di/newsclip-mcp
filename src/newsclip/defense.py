@@ -79,6 +79,7 @@ class DefenseRecord(FrozenModel):
     #: Single-flight expiry-canary claim; None when no canary is in flight.
     probe_lease_until: datetime | None = None
     incident_id: str | None = Field(default=None, pattern=r"^incident-[0-9a-f]{24}$")
+    incident_owner: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,47}$")
 
     def arms_within_day(self, now: datetime) -> int:
         """Count arms in the rolling 24 h ending at ``now``.
@@ -128,10 +129,12 @@ class DefenseState:
         *,
         utc_now: Callable[[], datetime] | None = None,
         incident_root: Path | None = None,
+        incident_owner: str | None = None,
         lock_timeout_seconds: float = _LOCK_TIMEOUT_SECONDS,
     ) -> None:
         self.root = root
         self.incident_root = incident_root
+        self.incident_owner = incident_owner
         self._probe_owners: ContextVar[frozenset[tuple[int, int, str]]] = ContextVar(
             "defense_probe_owners", default=frozenset()
         )
@@ -241,7 +244,7 @@ class DefenseState:
                 # backing off failed, so it neither doubles nor extends the
                 # cooldown, and it is not another arm in the day's history.
                 # Only a canary's challenge (lease set by ``gate``) escalates.
-                return DefenseArm(record=prior, first_of_episode=False)
+                return DefenseArm(record=self._visible(prior), first_of_episode=False)
             horizon = now - _DAY
             arms = tuple(
                 moment for moment in (prior.arms if prior else ()) if moment > horizon
@@ -259,9 +262,10 @@ class DefenseState:
                 origin=origin,
                 probe_lease_until=None,
                 incident_id=prior.incident_id if prior else None,
+                incident_owner=prior.incident_owner if prior else None,
             )
             self._write(provider, record)
-        return DefenseArm(record=record, first_of_episode=prior is None)
+        return DefenseArm(record=self._visible(record), first_of_episode=prior is None)
 
     def clear(self, provider: str) -> bool:
         """Remove containment after a full-access success. True if one existed."""
@@ -290,6 +294,7 @@ class DefenseState:
                 if record is not None and record.incident_id is None:
                     updated = record.model_dump()
                     updated["incident_id"] = incident_id
+                    updated["incident_owner"] = self.incident_owner
                     self._write(provider, DefenseRecord.model_validate(updated))
         except (OSError, IncidentPersistenceError, ValueError) as error:
             raise PersistenceError("defense evidence publication failed") from error
@@ -298,7 +303,14 @@ class DefenseState:
         if not self._path(provider).exists():
             return None
         with self._locked(provider):
-            return self._load_unlocked(provider)
+            record = self._load_unlocked(provider)
+            return self._visible(record) if record is not None else None
+
+    def _visible(self, record: DefenseRecord) -> DefenseRecord:
+        """Account containment is shared; request evidence remains private."""
+        if record.incident_owner == self.incident_owner:
+            return record
+        return record.model_copy(update={"incident_id": None, "incident_owner": None})
 
     # -- persistence ----------------------------------------------------
 

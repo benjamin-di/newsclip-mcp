@@ -57,6 +57,7 @@ class PublicErrorAction(StrEnum):
     HUMAN_ACCOUNT_CHECK = "human_account_check"
     NONE = "none"
     REPAIR_LOCAL_INFRASTRUCTURE = "repair_local_infrastructure"
+    OPEN_CONNECTIONS = "open_connections"
 
 
 class PublicErrorReason(StrEnum):
@@ -78,6 +79,9 @@ class PublicErrorReason(StrEnum):
     AUTHENTICATION_REQUIRED = "authentication_required"
     CONNECTION_DISCONNECTED = "connection_disconnected"
     CONNECTION_INTERACTIVE = "connection_interactive"
+    ACCOUNT_SELECTION_NEEDED = "account_selection_needed"
+    SHARED_ACCESS_REMOVED = "shared_access_removed"
+    ACCOUNT_CHANGED = "account_changed"
     RENDER_TIMEOUT = "browser_semantic_readiness_timeout"
     UNSEARCHABLE_QUERY = "unsearchable_query"
     #: An imported session reached the provider but could not prove access.
@@ -275,6 +279,12 @@ def public_error(error: BaseException) -> PublicErrorEnvelope | None:
         PublicErrorReason.PROFILE_EXIT_UNCONFIRMED,
     }:
         action = PublicErrorAction.REPAIR_LOCAL_INFRASTRUCTURE
+    if reason in {
+        PublicErrorReason.ACCOUNT_SELECTION_NEEDED,
+        PublicErrorReason.SHARED_ACCESS_REMOVED,
+        PublicErrorReason.ACCOUNT_CHANGED,
+    }:
+        action = PublicErrorAction.OPEN_CONNECTIONS
     candidate = getattr(error, "recovery_id", None)
     recovery_id = (
         candidate

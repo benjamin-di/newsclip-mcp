@@ -142,3 +142,61 @@ def test_new_token_revokes_previous_token_without_restarting(accounts, tmp_path)
             ).status_code
             == 200
         )
+
+
+def test_provider_defense_reason_crosses_authenticated_http_and_cli(
+    accounts, tmp_path, monkeypatch
+):
+    from test_federated_search import SearchProvider, _service
+
+    from newsclip.errors import ProviderDefenseError
+
+    monkeypatch.setattr(
+        "test_standalone._service",
+        lambda *args: _service(
+            SearchProvider("refused", error=ProviderDefenseError("private detail")),
+            SearchProvider("healthy"),
+        ),
+    )
+    app, tokens, _ = make_app(accounts, tmp_path)
+    with TestClient(app, base_url="http://127.0.0.1") as http:
+
+        def transport(request):
+            response = http.request(
+                request.method,
+                str(request.url),
+                headers=request.headers,
+                content=request.content,
+            )
+            return httpx.Response(
+                response.status_code, headers=response.headers, content=response.content
+            )
+
+        original = NewsclipClient.__init__
+
+        def initialize(self, url, token, **kwargs):
+            original(self, url, token, transport=httpx.MockTransport(transport))
+
+        monkeypatch.setattr(NewsclipClient, "__init__", initialize)
+        runner = CliRunner()
+        args = [
+            "--server",
+            "http://127.0.0.1/users/alice",
+            "--token-file",
+            str(tmp_path / "alice.token"),
+            "search",
+            "capital",
+        ]
+        response = runner.invoke(cli.app, [*args, "--json"])
+        assert response.exit_code == 0, response.output
+        assert json.loads(response.output)["sources"][0]["reason"] == "provider_defense"
+        text = runner.invoke(cli.app, args)
+        assert text.exit_code == 0, text.output
+        assert "publisher challenge or cooldown" in text.output
+        assert "private detail" not in text.output
+        denied = http.post(
+            "/users/bob/api/search",
+            json={"query": "capital"},
+            headers={"Authorization": f"Bearer {tokens['alice']}"},
+        )
+        assert denied.status_code == 401

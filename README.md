@@ -35,8 +35,11 @@ docker compose up -d
 
 Setup writes private token files and configuration without printing secrets.
 Remote sign-in requires an OIDC provider such as Pocket ID and a verified
-identity-to-user binding. Open `/connections/` to manage your own subscriptions;
-assistant API access remains separate from browser management.
+identity-to-user binding. Open `/connections/` to manage your own subscriptions
+or explicitly use one another user shared with you;
+assistant API access remains separate from browser management. Sharing is selected
+per publisher, and saved articles always stay in your private archive. See
+[shared subscriptions](docs/SHARING.md).
 This identity check is required for every remote management attempt, including
 the viewer and its WebSocket. A copied link or MCP bearer grants no management
 authority. See the [permission boundaries](docs/AUTHENTICATION.md#permission-boundaries).

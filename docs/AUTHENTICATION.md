@@ -157,3 +157,10 @@ reports these conditions without treating a partial page as a full article.
 The public product does not automate credential entry or purchase subscriptions.
 Accounts and API access must already have the permissions the requested content
 requires. Diagnostics can contain sensitive browser content and remain private.
+
+## Shared publisher access
+
+Publisher ownership, grants and selected subscriptions are independent of API
+admission and browser identity. See [Shared subscriptions](SHARING.md) for per-publisher
+selection, revocation, saved-content ownership and recovery. Sharing never enrolls
+a new user or grants credential-management authority.

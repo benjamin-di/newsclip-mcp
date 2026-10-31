@@ -216,6 +216,9 @@ def test_keeper_renews_under_a_session_evidence_hold(tmp_path: Path) -> None:
         action = GuardAction.WAIT_FOR_SESSION_EVIDENCE
 
     class _HeldGuard:
+        def current_hold_health(self, provider: str):
+            return None
+
         def peek(self, provider: str):
             return _Hold()
 
@@ -273,6 +276,9 @@ def test_keeper_still_blocks_on_every_other_hold_class(tmp_path: Path) -> None:
             action = blocking
 
         class _Guard:
+            def current_hold_health(self, provider: str):
+                return None
+
             def peek(self, provider: str):
                 return _Hold()
 
@@ -317,6 +323,9 @@ def test_keeper_routes_incident_review_hold_to_the_bounded_canary(
     outcomes: list[GuardResult] = []
 
     class _Guard:
+        def current_hold_health(self, provider: str):
+            return None
+
         def __init__(self, cleared: bool) -> None:
             self.cleared = cleared
             self.canaries = 0

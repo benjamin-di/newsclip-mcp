@@ -255,6 +255,7 @@ def collect_fleet_health(
             recovery_action = None
             if (
                 recovery_unresolved
+                or hold is not None
                 or (session_backed and session is None)
                 or (session or {}).get("consecutive_renewal_failures", 0) > 0
             ):
@@ -266,6 +267,7 @@ def collect_fleet_health(
                         if field
                         in {
                             "next_action",
+                            "current_hold",
                             "repair_hint",
                             "recovery_blocker",
                             "recovery_retry_at",

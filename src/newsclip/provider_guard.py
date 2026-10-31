@@ -144,6 +144,23 @@ class ProviderHold(FrozenModel):
         return self
 
 
+class CurrentHoldHealth(FrozenModel):
+    """Advisory current brake, independent of historical article recovery.
+
+    Canary timestamps describe reservation and eligibility, never permission to
+    dispatch. The guard rechecks under its lock before any provider contact.
+    """
+
+    hold_id: str = Field(pattern=_HOLD_ID_PATTERN)
+    action: GuardAction
+    failure: ProviderCheckFailure
+    incident_id: str | None = Field(default=None, pattern=_INCIDENT_ID_PATTERN)
+    held_operation: Literal["provider_check"] = "provider_check"
+    occurred_at: AwareDatetime
+    last_canary_at: AwareDatetime | None = None
+    next_eligible_canary_at: AwareDatetime | None = None
+
+
 class GuardResult(FrozenModel):
     provider: str = Field(pattern=PROVIDER_KEY_PATTERN)
     guarded: bool = True
@@ -593,6 +610,35 @@ class ProviderGuard:
         with self._store.locked(provider):
             return self._store.load_locked(provider)
 
+    def current_hold_health(self, provider: str) -> CurrentHoldHealth | None:
+        """Read this user's current hold and cadence without writes or provider I/O.
+
+        Atomic files give complete advisory reads without waiting behind a
+        running check. A corrupt cadence must raise, not imply eligibility.
+        """
+        hold = self.peek(provider)
+        if hold is None:
+            return None
+        state = (
+            self._store.load_incident_canary_locked(provider)
+            if hold.action is GuardAction.INCIDENT_REVIEW_REQUIRED
+            else None
+        )
+        now = self._store.now()
+        return CurrentHoldHealth(
+            hold_id=hold.hold_id,
+            action=hold.action,
+            failure=hold.failure,
+            incident_id=hold.incident_id,
+            occurred_at=hold.occurred_at,
+            last_canary_at=state.last_canary_at if state is not None else None,
+            next_eligible_canary_at=(
+                _incident_canary_not_before(state, now) or now
+                if hold.action is GuardAction.INCIDENT_REVIEW_REQUIRED
+                else None
+            ),
+        )
+
     def last_check(self, provider: str) -> ProviderCheckObservation | None:
         """Read the last completed guarded canary without provider I/O.
 
@@ -631,15 +677,7 @@ class ProviderGuard:
             state = self._store.load_incident_canary_locked(provider)
         except ProviderGuardPersistenceError:
             return None
-        if state is None:
-            return None
-        interval = timedelta(seconds=_INCIDENT_CANARY_INTERVAL_SECONDS)
-        pending = [
-            marker + interval
-            for marker in (state.last_canary_at, state.last_auto_clear_at)
-            if marker is not None and _within_canary_interval(marker, now)
-        ]
-        return max(pending) if pending else None
+        return _incident_canary_not_before(state, now)
 
     def run(
         self,
@@ -970,6 +1008,20 @@ class ProviderGuard:
             # operator hold that nothing but acknowledgement can clear.
             return GuardAction.INCIDENT_REVIEW_REQUIRED
         return GuardAction.OPERATOR_ACTION
+
+
+def _incident_canary_not_before(
+    state: IncidentCanaryState | None, now: datetime
+) -> datetime | None:
+    if state is None:
+        return None
+    interval = timedelta(seconds=_INCIDENT_CANARY_INTERVAL_SECONDS)
+    pending = [
+        marker + interval
+        for marker in (state.last_canary_at, state.last_auto_clear_at)
+        if marker is not None and _within_canary_interval(marker, now)
+    ]
+    return max(pending) if pending else None
 
 
 def _within_canary_interval(marker: datetime | None, now: datetime) -> bool:

@@ -984,3 +984,23 @@ def test_native_error_text_omits_unnamed_refinements(tmp_path: Path) -> None:
     assert "null" not in text
     assert "reason" not in text
     assert "incident_id" not in text
+
+
+def test_provider_defense_source_reason_crosses_mcp_wire():
+    from test_federated_search import SearchProvider
+    from test_federated_search import _service as search_service
+
+    from newsclip.errors import ProviderDefenseError
+
+    server = NewsclipMcp(
+        lambda: search_service(
+            SearchProvider("refused", error=ProviderDefenseError("private detail")),
+            SearchProvider("healthy"),
+        )
+    ).build_server()
+    contents = anyio.run(lambda: call_tool(server, "search", {"query": "capital"}))
+    blocks = contents[0] if isinstance(contents, tuple) else contents
+    payload = json.loads(blocks[0].text)
+    assert payload["ok"] is True
+    assert payload["result"]["sources"][0]["reason"] == "provider_defense"
+    assert "private detail" not in json.dumps(payload)

@@ -11,10 +11,12 @@ from lxml import etree
 from pydantic import HttpUrl
 
 from ..articles import parse_aware_datetime
+from ..assessment import search_status_failure
 from ..configured_provider import ConfiguredProvider, normalize_url, provider_article_id
 from ..contracts import HttpClient
 from ..errors import (
     ProviderContractError,
+    ProviderDefenseError,
     ProviderTransportError,
     UnsearchableQueryError,
 )
@@ -261,6 +263,17 @@ class ReutersProvider(ConfiguredProvider):
         endpoint = str(self._search.endpoint)
         url = _sitemap_url(endpoint, offset)
         fetch = http.get(url, session=None, timeout=_SEARCH_TIMEOUT_SECONDS)
+        # Bound the response before the challenge classifier parses it. A known
+        # publisher challenge takes precedence over status and XML parsing.
+        if len(fetch.raw_html) > _MAX_SITEMAP_BYTES:
+            raise ProviderContractError("provider sitemap exceeded the size limit")
+        if self.is_interactive_challenge(fetch):
+            raise ProviderDefenseError(
+                "provider sitemap returned a challenge",
+                provider=self.key,
+                reason_code="interactive_challenge",
+                fetch=fetch,
+            )
         _validate_sitemap_response(fetch, url, endpoint, offset)
         try:
             parser = etree.XMLParser(
@@ -271,7 +284,7 @@ class ReutersProvider(ConfiguredProvider):
             )
             document = etree.fromstring(fetch.raw_html, parser=parser)
         except etree.XMLSyntaxError as error:
-            raise ProviderTransportError(
+            raise ProviderContractError(
                 "provider sitemap returned malformed XML"
             ) from error
         expected_tag = f"{{{_SITEMAP_NAMESPACES['sitemap']}}}urlset"
@@ -382,13 +395,14 @@ def _validate_sitemap_response(
 ) -> None:
     if not 200 <= fetch.http_status < 300:
         raise ProviderTransportError(
-            f"provider sitemap returned HTTP {fetch.http_status}"
+            f"provider sitemap returned HTTP {fetch.http_status}",
+            category=search_status_failure(fetch.http_status),
         )
     if len(fetch.raw_html) > _MAX_SITEMAP_BYTES:
-        raise ProviderTransportError("provider sitemap exceeded the size limit")
+        raise ProviderContractError("provider sitemap exceeded the size limit")
     media_type = (fetch.content_type or "").partition(";")[0].strip().lower()
     if media_type not in {"application/xml", "text/xml"}:
-        raise ProviderTransportError("provider sitemap returned non-XML content")
+        raise ProviderContractError("provider sitemap returned non-XML content")
     if str(fetch.requested_url) != requested_url:
         raise ProviderContractError("provider sitemap request identity mismatch")
     try:

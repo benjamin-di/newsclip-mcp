@@ -1342,3 +1342,74 @@ def test_candidate_probe_refuses_names_outside_the_allowlist(
 
     with pytest.raises(UsageError):
         service.probe_transport_candidate("reuters", "firefox147")
+
+
+@pytest.mark.parametrize(
+    ("status", "content_type", "body", "expected", "category"),
+    [
+        (
+            401,
+            "text/html",
+            b"<html><body>Please enable JS and disable any ad blocker</body></html>",
+            ProviderDefenseError,
+            None,
+        ),
+        (
+            200,
+            "text/html",
+            b"<html><body>Please enable JS and disable any ad blocker</body></html>",
+            ProviderDefenseError,
+            None,
+        ),
+        (401, "text/plain", b"refused", ProviderTransportError, "provider_error"),
+        (403, "text/plain", b"refused", ProviderTransportError, "provider_error"),
+        (429, "text/plain", b"slow down", ProviderTransportError, "rate_limited"),
+        (503, "text/plain", b"unavailable", ProviderTransportError, "provider_error"),
+        (
+            200,
+            "text/html",
+            b"<html>publisher landing page</html>",
+            ProviderContractError,
+            None,
+        ),
+        (200, "application/xml", b"<broken", ProviderContractError, None),
+        (200, "application/xml", b"<wrong-root/>", ProviderContractError, None),
+    ],
+)
+def test_sitemap_failure_is_classified_before_xml_parsing(
+    status, content_type, body, expected, category
+):
+    class Response:
+        def get(self, url, **kwargs):
+            return RawFetch(
+                requested_url=url,
+                final_url=url,
+                retrieved_at=NOW,
+                http_status=status,
+                content_type=content_type,
+                raw_html=body,
+            )
+
+    with pytest.raises(expected) as caught:
+        ReutersProvider()._sitemap_page(Response(), offset=0)
+    assert type(caught.value) is expected
+    if category is not None:
+        assert caught.value.category == category
+    assert body.decode() not in str(caught.value)
+
+
+@pytest.mark.parametrize("category", ["timeout", "dns"])
+def test_sitemap_preserves_network_failure(category):
+    from newsclip.errors import TransportFailure
+
+    failure = ProviderTransportError(
+        "bounded transport failure", category=TransportFailure(category)
+    )
+
+    class Broken:
+        def get(self, url, **kwargs):
+            raise failure
+
+    with pytest.raises(ProviderTransportError) as caught:
+        ReutersProvider()._sitemap_page(Broken(), offset=0)
+    assert caught.value is failure

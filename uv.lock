@@ -11,6 +11,15 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "account-connections"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/1c/8488bb9d25f51bcb593b770b663f73c8328fa6824cbf1420036a771509d2/account_connections-0.1.1.tar.gz", hash = "sha256:f235e2f58ed63fbe046e523dff44b4692a337e6ede5467af7ad63ba88473ecee", size = 33695, upload-time = "2026-10-31T04:29:09.92Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/46/b5/0a4031e41ed2876d0140f0c1cb537da06e9659b6834e69ff1598d66700cf/account_connections-0.1.1-py3-none-any.whl", hash = "sha256:6bb3d7043d4dd02610cd7ed73cbd91764ea9f5d88714d2df65a309786b8962a6", size = 6117, upload-time = "2026-10-31T04:29:08.239Z" },
+]
+
+[[package]]
 name = "aiofile"
 version = "3.12.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1166,9 +1175,10 @@ wheels = [
 
 [[package]]
 name = "newsclip"
-version = "0.9.12"
+version = "1.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "account-connections" },
     { name = "click" },
     { name = "curl-cffi" },
     { name = "httpx" },
@@ -1204,6 +1214,7 @@ transport-lab = [
 
 [package.metadata]
 requires-dist = [
+    { name = "account-connections", specifier = "==0.1.1" },
     { name = "anyio", marker = "extra == 'mcp'", specifier = ">=4.8,<5" },
     { name = "click", specifier = ">=8.4,<9" },
     { name = "curl-cffi", specifier = ">=0.16.3,<1" },

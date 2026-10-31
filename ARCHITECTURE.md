@@ -26,6 +26,12 @@ requests. New users require a restart to create their mounted application.
 Composition resolves every user's data and state roots independently, without
 changing process-wide environment variables. Sessions, profiles, leases,
 incidents, search cursors, archives and server exports use those roots.
+A hosted subscription selection may capture another owner's session, profile,
+native controls and account limits for one publisher. Composition keeps archives,
+exports, timing and request diagnostics rooted at the requesting user; it never
+runs the entire request in the owner's identity scope. Shared readers have no
+credential acquisition or recovery-queue collaborators. The pure selection rules
+come from `account-connections`; Newsclip owns the durable adapter and routing.
 Callbacks preserve the construction user's context when invoked from a worker.
 The host administrator remains trusted.
 

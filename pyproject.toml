@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "newsclip"
-version = "0.9.12"
+version = "1.0.0"
 description = "News search, verified subscription reading and private archiving"
 license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
@@ -22,6 +22,7 @@ dependencies = [
   "trafilatura>=2,<3",
   "typer>=0.16,<1",
   "signin-window[automation,oidc]>=0.4.17,<0.5",
+  "account-connections==0.1.1",
 ]
 
 [project.optional-dependencies]

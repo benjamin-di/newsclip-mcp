@@ -37,7 +37,14 @@ error envelope exposed by the CLI/MCP adapters. Authentication errors return
 | `archive_integrity`, `archive_rebuild_fts`, `providers`, `doctor` | Empty object |
 
 `search_start` returns a cursor and first page. Other search calls return a
-`SearchResponse`, including source status and coverage limitations. `/health`
+`SearchResponse`, including source status and coverage limitations. Source
+reasons distinguish `provider_defense` (recognized publisher challenge or active
+cooldown), `rate_limited`, `provider_error`, `timeout`, `dns`, `transport`,
+`contract` and `persistence`. Upgrade typed clients with the server when adding a
+source-reason enum member. A successful source beside a failed one remains
+available; this diagnosis does not initiate recovery or retry a refused request.
+
+`/health`
 returns readiness without user/account data. Connection and viewer routes require
 the mapped owner's OIDC browser session. Their expiring identifiers select an
 attempt; they do not grant authority. A reader bearer cannot manage a connection.
@@ -55,3 +62,9 @@ Tool descriptions distinguish transient reads, durable archiving and explicit
 re-extraction. Calls never return credentials, cookie exports, raw browser
 profiles or diagnostic captures. A session-required failure calls for human
 connection; `not_entitled` means renewal will not grant the requested article.
+
+Subscription selection failures retain the `session_required` category and add
+closed reasons `account_selection_needed`, `shared_access_removed` and
+`account_changed`, with action `open_connections`. Give the person their existing
+Connections link and let them choose; do not select or reconnect another account
+on their behalf. Shared subscriptions do not change archive ownership.
