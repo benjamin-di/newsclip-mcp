@@ -35,6 +35,12 @@ come from `account-connections`; Newsclip owns the durable adapter and routing.
 Callbacks preserve the construction user's context when invoked from a worker.
 The host administrator remains trusted.
 
+Federated search isolates both search execution and source reporting failures.
+Unreadable containment state is reported for its captured source without losing
+healthy results from other sources. An existing search error keeps its typed
+reason; a reporting-only storage failure uses `persistence`. This reporting
+boundary does not relax the native defense checks on article retrieval.
+
 API delegation, browser management and publisher access are separate authority
 layers. A gateway such as Agentgateway validates the API caller's audience,
 scopes, explicit grant and group ceiling before selecting a registered backend

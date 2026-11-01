@@ -41,10 +41,7 @@ page_parameter = "page"
 missing_published_fetch_limit = 1
 
 [check]
-# The exact headline keeps the canary at rank 1. The earlier topical query
-# ("Chinese Moonshot Kimi K3 Anthropic") let newer stories push it to rank 26
-# by 2026-09-28, past the first 25-result page, and held FT at
-# expected_result_missing while the article still served.
+# Use the exact headline to reduce canary displacement by newer stories.
 query = "Chinese AI start-up Moonshot launches model challenging Anthropic's lead"
 canonical_url = "https://www.ft.com/content/c6ecd8ce-c441-4d7c-aea6-fae3e28fb6ff"
 
@@ -53,13 +50,8 @@ canonical_signal = "canonical_content_url"
 article_xpath = ["//article", "//*[@data-trackable='article-body']", "//*[@data-component='article-body']"]
 required_signals = ["newsarticle_jsonld", "jsonld_headline", "article_body_structure", "markdown_body", "extracted_headline"]
 
-# Each transport sees a different edge surface for the same defense: the
-# browser plane is served the interactive "just a moment..." interstitial,
-# while the HTTP plane is served the non-interactive "Security Verification"
-# error page. Both are the challenge; classifying only the browser shape left
-# the HTTP shape to be reported as a bare transport failure and skipped the
-# browser fallback that can actually resolve it (live HTTP evidence
-# 2026-07-25).
+# Browser and HTTP transports can expose different challenge pages.
+# Classify both forms so eligible HTTP challenges reach browser fallback.
 [[assessment.negative_rules]]
 kind = "challenge"
 title_equals = ["just a moment...", "security verification"]
@@ -76,13 +68,9 @@ xpath_any = ["//form[contains(@action, '/login') and (.//input[@type='password']
 kind = "authentication"
 final_url_path_prefixes = ["/barrier/"]
 
-# A signed-out session can be served in place: the article URL with the
-# anonymous header ("Sign In") over the subscribe barrier, no redirect. FT does
-# this when it revokes a session under its concurrent-session policy (live
-# 2026-10-15/16: access decision INVALID_SESSION_POLICY), where it used to
-# redirect to /barrier/concurrency. Every retained signed-in fetch renders the
-# "My Account" header instead, so the anonymous header is session evidence, not
-# a subscriber teaser; authentication outranks the paywall rule below.
+# A signed-out response can retain the article URL and display an anonymous
+# header above a subscription barrier. Authentication evidence takes precedence
+# over paywall classification; a redirect is not required.
 [[assessment.negative_rules]]
 kind = "authentication"
 xpath_any = ["//*[@data-trackable='header-anon']"]
@@ -109,8 +97,8 @@ accept_language = "en-GB,en;q=0.9"
 args = ["--disable-features=WebAuthentication,WebAuthenticationPasskeysUI,WebAuthCable,WebAuthnConditionalUI", "--disable-dev-shm-usage"]
 
 [auth.controls]
-# Live accounts.ft.com enter-email step (2026-07-22): id="enter-email" and
-# id="enter-email-next". Prefer those stable ids; keep structural fallbacks.
+# The enter-email control and its form can be distinct nodes.
+# Select the editable input rather than the containing form.
 username = ["#enter-email", "input[name='email']", "#email", "input[type='email']"]
 password = ["input[name='password']:not([name='_notUsed'])", "input[type='password']:not([name='_notUsed'])"]
 username_submit = [

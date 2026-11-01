@@ -34,10 +34,9 @@ _SITEMAP_NAMESPACES = {
     "news": "http://www.google.com/schemas/sitemap-news/0.9",
 }
 _PAGE_SIZE = 50
-# Parallel first-window sitemap pages cover distinctive live queries that can
-# sit several hundred URLs deep (live baseline observed at page index 6 /
-# offset 300+). Reuters does not guarantee chronological partitioning within or
-# across offsets, so the bounded window is ranked only after every page closes.
+# Search a bounded window of sitemap pages in parallel to reach beyond the
+# first page. Pages need not be partitioned chronologically, so rank the window
+# only after every requested page closes.
 _MAX_PAGES = 8
 _SEARCH_TIMEOUT_SECONDS = 8
 _MAX_SITEMAP_BYTES = 2_000_000
@@ -46,9 +45,8 @@ _SLUG_DATE_PATTERN = re.compile(r"-(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})$")
 # earns a candidate its place when the token itself carries information. English
 # closed-class words carry none: they occur in a large fraction of headlines
 # regardless of subject, so scoring them promotes whichever unrelated story is
-# newest. The earlier seven-word list was incomplete by construction — a live
-# census of the sitemap window found "of" alone matching 23 of 400 entries for
-# the query "Strait of Hormuz", including an outfielder abbreviation.
+# newest. Exclude function words so an unrelated headline cannot qualify
+# solely through a common preposition.
 #
 # This is therefore the closed class itself — articles, demonstratives,
 # prepositions, conjunctions, pronouns, and auxiliaries — enumerated inline and
@@ -351,12 +349,9 @@ def _split_slug_date(path: str) -> tuple[str, str | None]:
 def _reconciled_published(published: datetime, slug_date: str | None) -> datetime:
     """Clamp a mutable sitemap timestamp to the immutable publish day.
 
-    ``news:publication_date`` is a re-stamp time, not a first-publish time:
-    Reuters rewrites it when a story is re-published, and a live census of the
-    400-URL window found 11 entries stamped more than a day past their slug
-    date, the worst by 773 days. Left alone those re-syndicated stories top
-    ``sort=newest`` and pass a recent ``--published-after``, which also inflates
-    Reuters' recency in the federated merge.
+    A sitemap publication timestamp can reflect re-publication rather than
+    first publication. Without reconciliation, an older re-syndicated story
+    could incorrectly qualify for recent filters and newest-first ranking.
 
     The slug date is the fix already on hand: the identity ``path_pattern``
     validates it in every accepted URL, and unlike the sitemap field it never

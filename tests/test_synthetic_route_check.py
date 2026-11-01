@@ -1,11 +1,7 @@
-"""The outer watchdog's classification: what pages, and what deliberately does not.
+"""Classify synthetic external-route checks without contacting providers.
 
-Guardian died on the public route for four days while every internal
-monitor called it healthy. This check exists to catch that class from an
-external vantage — and, just as importantly, to stay silent through the
-handled conditions the deployment is designed to sit in, because a
-watchdog that pages for containment is one nobody reads.
-"""
+Local faults page; bounded containment and transient conditions use their
+existing persistence and retry rules."""
 
 from __future__ import annotations
 
@@ -115,7 +111,7 @@ def test_a_healthy_fleet_passes() -> None:
     ["operator_action", "session_required", "persistence"],
 )
 def test_a_local_fault_pages_immediately(reason: str) -> None:
-    """Guardian's class: the deployment itself is broken, not the edge."""
+    """A synthetic local deployment fault pages independently of edge state."""
 
     module = _module()
     response = _search_response(
@@ -152,11 +148,7 @@ def test_handled_conditions_never_page_on_one_run(
     reason: str | None,
     contained: bool,
 ) -> None:
-    """Containment and transient edge conditions are the system working.
-
-    Paging for them is exactly the alert fatigue that made Guardian's
-    four-day outage get noticed by accident.
-    """
+    """Synthetic containment and transient edge conditions do not page at once."""
 
     module = _module()
     response = _search_response(
@@ -370,7 +362,7 @@ def test_a_rejection_carries_its_own_category_into_the_alert() -> None:
 
 
 def test_a_transport_blip_shorter_than_the_retry_never_pages() -> None:
-    """2026-08-05: an 8-second gateway health-gate window paged a person."""
+    """A synthetic brief gateway failure recovers within the bounded retry."""
 
     module = _module()
     healthy = _search_response([_source("guardian")])
@@ -1001,7 +993,7 @@ def test_sample_searches_five_and_records_only_a_url_hash(tmp_path):
 
 
 def test_one_article_failing_every_check_is_stuck_not_down(tmp_path):
-    """2026-09: one unentitled WSJ Pro top hit paged WSJ DOWN for 7.5 hours."""
+    """One repeatedly unreadable synthetic article is a stuck sample, not DOWN."""
 
     refusing = _article_poster(failure={"ok": False, "category": "content_not_full"})
     _article_check(tmp_path, refusing)
@@ -1054,11 +1046,10 @@ def _poster_failing_only(bad, urls):
 
 
 def test_sample_steps_past_every_recently_failed_article(tmp_path):
-    """2026-10-15: Bloomberg's two top `markets` hits were podcast pages.
+    """Synthetic non-article results must all enter the recent-failure window.
 
-    Remembering only the last failure alternated between them, a streak on
-    two distinct URLs, and paged Bloomberg DOWN while its articles read FULL.
-    """
+    Remembering only one would alternate between two failures while other
+    articles remain readable."""
 
     c_url = "https://article.test/c"
     post = _poster_failing_only({A_URL, B_URL}, (A_URL, B_URL, c_url))

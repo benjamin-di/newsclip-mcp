@@ -13,6 +13,7 @@ from newsclip.composition import build_connection_reader, build_mcp_service
 from newsclip.connection_controls import ConnectionControls
 from newsclip.defense import BASE_COOLDOWN_SECONDS
 from newsclip.errors import (
+    PersistenceError,
     ProviderDefenseError,
     ProviderTransportError,
     SessionRequiredError,
@@ -25,6 +26,7 @@ from newsclip.models import (
     RawFetch,
     SearchFilters,
     SessionArtifact,
+    SourceSearchReason,
     SourceSearchState,
 )
 from newsclip.providers import ProviderRegistry
@@ -183,6 +185,40 @@ def test_rejected_shared_source_preserves_healthy_federated_results(
     assert reports["fixture"].retrieval_contained_until is None
     assert reports["healthy"].state is SourceSearchState.OK
     assert paid.page_calls == [] and public.page_calls == [1]
+
+
+@pytest.mark.parametrize("shared_choice", [False, True])
+def test_corrupt_captured_defense_preserves_other_sources(runtime, shared_choice):
+    owner, local, shared, paid, _, _ = runtime
+
+    class Public(PagedFakeProvider):
+        key = "healthy"
+        capabilities = ProviderCapabilities(
+            session_kind="none", requires_session_for_retrieve=False
+        )
+
+    public = Public(total=1)
+    service = local if shared_choice else owner
+    service._registry = ProviderRegistry((paid, public))
+    # A real search-refusal preflight fails on this damaged owner record;
+    # reporting it must not escape the source's existing failure boundary.
+    path = owner._defense._path("fixture")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("damaged synthetic state")
+    owner._search_refused_until["fixture"] = NOW + timedelta(hours=1)
+
+    response = service.search_pager("synthetic").next_batch(5)
+
+    assert response.results and all(
+        result.provider == "healthy" for result in response.results
+    )
+    reports = {report.provider: report for report in response.sources}
+    assert reports["fixture"].reason is SourceSearchReason.PERSISTENCE
+    assert reports["fixture"].retrieval_contained_until is None
+    assert reports["healthy"].state is SourceSearchState.OK
+    assert paid.page_calls == [] and public.page_calls == [1]
+    with pytest.raises(PersistenceError, match="malformed"):
+        shared.get(FULL_URL)
 
 
 @pytest.mark.parametrize("first_actor", ["alice", "bob", "carol"])

@@ -1,10 +1,8 @@
 """One per-provider defense state machine: backoff is the heal.
 
 Edge defenses (DataDome, Cloudflare, Turnstile) relent when traffic backs off
-and escalate when it does not. Before this module the product did the
-opposite: every caller retried straight into an active challenge, each hit
-extending the block (the 2026-07-28 Reuters episode). This record makes the
-product self-limiting:
+and can escalate under repeated requests. This record bounds retries into
+an active challenge:
 
 - an observed challenge **arms** a cooldown (base 20 min, doubling per
   consecutive arm to a 6 h cap); a challenge from a request already in
@@ -16,8 +14,8 @@ product self-limiting:
   single-flight lease, compare-and-set under the state lock); competitors
   keep failing fast;
 - only a **full-access retrieval success** clears the record — search
-  succeeds *during* DataDome episodes and Bloomberg "success" can be a
-  teaser, so anything less would be spoofable.
+  can succeed during defense episodes and a successful HTTP response can
+  contain only a teaser, so weaker evidence cannot clear the record.
 
 There is deliberately one state machine: article-fetch challenges and guard
 canary failures feed the same record (ARCHITECTURE, "Provider containment

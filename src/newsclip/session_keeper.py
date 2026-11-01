@@ -11,11 +11,10 @@ as an operator escalation instead of a reason to try again. Nothing here
 clears a hold, and nothing retries a provider that has just refused.
 
 It refuses to touch a held provider with one deliberate exception: a hold
-whose named remedy *is* session renewal or promotion. Blocking the renewer on
-those created a closed loop — the keeper refused to act, so nothing verified,
-so the hold that clears on verification never cleared. Attempting under such a
-hold stays bounded by warm-first reuse, readiness gating, and the same daily
-credential budget; success clears the hold through the guard's evidence path.
+whose named remedy *is* session renewal or promotion. Allow bounded renewal
+under those holds so the event required to clear them can occur. Warm-first
+reuse, readiness gating and the same daily credential budget still apply;
+success clears the hold through the guard's evidence path.
 """
 
 from __future__ import annotations
@@ -315,9 +314,8 @@ class KeeperResult(FrozenModel):
         if self.action is KeeperAction.CHECK_FAILED:
             return KeeperNextAction.REVIEW_PROVIDER
         if self.reason_code == "provider_defense":
-            # The edge refused the renewal probe, and it has also refused
-            # reads the browser then served: the session is fine and the HTTP
-            # fingerprint is what aged (2026-10-19, FT chrome146).
+            # A challenged renewal plus browser-recovered HTTP reads indicates that
+            # the HTTP fingerprint may need repair rather than account replacement.
             if self.http_challenges_24h:
                 return KeeperNextAction.UPDATE_HTTP_FINGERPRINT
             return KeeperNextAction.REVIEW_PROVIDER
@@ -325,16 +323,10 @@ class KeeperResult(FrozenModel):
 
     @property
     def repair_hint(self) -> str | None:
-        """The one call that resolves this outcome, or None when none does.
+        """Name the next repair for this outcome, or None when none applies.
 
-        An alert that names only a failure makes the reader go find the
-        runbook; the eight-day Bloomberg loop was not helped by knowing it
-        said "transport failure". This maps the outcome to the specific
-        repair, so the notification carries its own fix.
-
-        Templated on the provider key alone — never on provider text, error
-        detail, or anything read from a secret.
-        """
+        Hints use only the provider key and fixed text; provider responses, error
+        details and secrets must never enter notifications."""
 
         if self.next_action is KeeperNextAction.UPDATE_HTTP_FINGERPRINT:
             return (
@@ -446,11 +438,10 @@ class KeeperResult(FrozenModel):
             "session_promotion_required",  # previously persisted outcomes
             _PAID_PROBE_INCONCLUSIVE,
         }:
-            # Verify before promoting: the 2026-08-06 Bloomberg escalation
-            # was a probe that could not read its page, not a dead session —
-            # a FULL guarded canary disproves "unentitled" (its contract
-            # requires full content AND an identity match), and then the
-            # latch clears with one bounded renewal instead of a cookie hunt.
+            # Verify before promoting: an unreadable probe does not establish
+            # failed entitlement. A FULL guarded canary requires both complete
+            # content and an identity match before a bounded renewal may clear
+            # the latch.
             return (
                 f"review the retained probe and run ops provider_check("
                 f"provider={provider!r}); if healthy, run ops heal("
@@ -600,9 +591,8 @@ class _Outcomes(Protocol):
 class _Sessions(Protocol):
     """The narrowest session surface upkeep needs.
 
-    These are typed against the real models rather than left open. The one
-    serious defect this module has shipped was an inverted escalation class,
-    which open types could not catch and these can.
+    Concrete return models let type checking reject incompatible escalation
+    and session-health values at the upkeep boundary.
     """
 
     def session_status(self, provider_key: str) -> SessionHealth: ...
@@ -1012,16 +1002,11 @@ class SessionKeeper:
     def _held_recovery_not_before(
         self, provider: str, hold: object, now: datetime
     ) -> datetime:
-        """When the watcher should next look at a request a hold blocks.
+        """When a hold-blocked recovery request should next be reconsidered.
 
-        A hold cannot clear inside the 30-second watcher: only the scheduled
-        keeper cycle (the daily canary, verified renewal) or an operator
-        acknowledgement clears it, and that cycle re-reads the hold and
-        releases this deferral itself. Polling every 20 minutes merely
-        respawned an ``auth keep --recovery-only`` child (and display) about
-        72 times a day while held. Wait at least one keeper cycle, and for an
-        incident-review hold until its next permitted canary.
-        """
+        A short-lived watcher cannot clear the hold. Wait at least one scheduled
+        keeper cycle, which re-reads it, or until the next permitted incident-review
+        canary. An operator acknowledgement can also allow the cycle to proceed."""
         until = now + _HELD_RECOVERY_RECHECK
         if getattr(hold, "action", None) is GuardAction.INCIDENT_REVIEW_REQUIRED:
             due_at = self._guard.incident_canary_due_at(provider)
@@ -1298,21 +1283,11 @@ class SessionKeeper:
         ignore_escalation: bool = False,
         force_due: bool = False,
     ) -> KeeperResult:
-        # A hold is the repository's brake, and the keeper still never clears
-        # one. It does distinguish *which* brake, though, because two hold
-        # classes name session renewal or promotion as their own remedy:
-        # blocking the renewer on them created a closed loop — the keeper
-        # refused to act, so nothing verified, so the hold that clears on
-        # verification never cleared. FT sat in exactly that loop for days
-        # (2026-07-25 → 2026-07-28) reporting `held` hourly.
-        #
-        # Attempting renewal under such a hold is bounded by the same guards
-        # as any other attempt: warm reuse first, readiness gating, and the
-        # once-per-day credential budget. A success verifies the session,
-        # which clears the hold through the guard's evidence path; a failure
-        # is recorded and the day's attempt is spent. Defense, operator,
-        # local-state, and incident-review holds still stop the keeper dead —
-        # renewal is not their remedy and cannot be.
+        # Only session-evidence holds permit bounded renewal: verification is
+        # their remedy. Existing warm-reuse, readiness and credential-budget guards
+        # still apply. Positive verification clears them through the evidence path;
+        # failed attempts remain spent. Defense, operator, local-state and
+        # incident-review holds still stop the keeper.
         hold = self._guard.peek(provider)
         if hold is not None:
             # Fail closed: only a hold that positively identifies itself as a
@@ -1412,12 +1387,9 @@ class SessionKeeper:
             escalation = self._inconclusive_escalation(provider)
             if escalation is not None and not self._escalation_canary_clears(provider):
                 return escalation
-            # A FULL canary contradicts "unentitled" with live evidence, so
-            # the latch admits this one renewal instead of an operator page —
-            # the 2026-08-06 Bloomberg escalation was a probe that could not
-            # read its page while the session served full articles. A
-            # renewal that succeeds resets the streak; one that fails again
-            # re-latches with the canary spent for a day.
+            # A FULL canary supplies contradicting entitlement evidence, admitting
+            # one renewal. Success resets the streak; failure re-latches it with the
+            # canary budget spent for the day.
         return self._renew(
             provider,
             status=status,
@@ -1489,24 +1461,12 @@ class SessionKeeper:
             self._transport_pins.drip(provider)
 
     def _watch(self, provider: str) -> KeeperResult:
-        """Drift watch for a provider that has no session to keep.
+        """Watch transport drift for a sessionless provider.
 
-        A pinned transport is a measurement of an adaptive edge, and it decays
-        without anything in the product noticing: Reuters' pinned fingerprint
-        was characterized on 2026-07-24, was refused four times on 2026-07-28,
-        and nothing reported it because a sessionless provider entered no
-        cycle. One bounded `provider_check` per cycle is what makes that
-        visible the next day instead of the next time someone reads.
-
-        No new scheduled actor: this runs inside the cycle that already exists.
-        `provider_check` gates on the defense record before touching anything,
-        so a watch can never feed a contained edge.
-
-        When a rot signal stands and the provider is not contained, the same
-        cycle also measures **one** candidate fingerprint (R8) — one request
-        per hour, far below the volume that degraded this host's standing,
-        and it stops entirely once a pin is healthy or the pool is exhausted.
-        """
+        Run one bounded provider check inside the existing cycle, respecting
+        defense before any request. When uncontained and a rot signal remains,
+        measure at most one candidate fingerprint per hour. Stop measuring once
+        a pin is healthy or the candidate pool is exhausted."""
 
         result = self._sessions.provider_check(provider)
         if result.ok:
@@ -1731,9 +1691,8 @@ class SessionKeeper:
             return None
         if prior is None:
             return None
-        # Counted on its own streak, not on the latest reason: Bloomberg was
-        # observed alternating inconclusive probes with genuine transport
-        # failures, and a latest-reason check never accumulates through that.
+        # Track unresolved entitlement independently of the latest failure type;
+        # alternating transport failures must not hide the accumulated streak.
         streak = getattr(prior, "consecutive_inconclusive", 0)
         if streak < _INCONCLUSIVE_STREAK:
             return None
@@ -1745,19 +1704,12 @@ class SessionKeeper:
         )
 
     def _escalation_canary_clears(self, provider: str) -> bool:
-        """Whether live contradicting evidence should let a renewal through.
+        """Allow one renewal only when bounded evidence contradicts the latch.
 
-        The escalation's exit used to be exclusively manual
-        (``ignore_escalation``), which converted every transient probe flake
-        into an operator page. This is the R9 doctrine applied to the latch:
-        at most one guarded canary per provider per 24h — spent before
-        dispatch in the outcome store, so a crash cannot refund it — and only
-        a FULL check (full content and an identity match, by
-        ``ProviderCheckResult``'s own contract) clears. A containment
-        verdict, any failure, or spent budget keeps the latch exactly as
-        before; the defense gate lives inside ``provider_check``, so a
-        contained edge is never contacted.
-        """
+        Spend at most one guarded canary per provider per 24h before dispatch so
+        interruption cannot refund its budget. Only FULL content with an identity
+        match admits renewal. Containment, failure or spent budget preserves the
+        latch; provider_check enforces defense before any provider request."""
 
         if self._outcomes is None:
             return False

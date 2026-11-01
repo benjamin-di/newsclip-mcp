@@ -59,11 +59,9 @@ def serving(tmp_path, monkeypatch):
         )
 
     class OfflineBrowser:
-        """The challenge escalation's browser leg, served from the same fixtures.
+        """Serve the challenge fallback from the same synthetic fixtures.
 
-        A challenged HTTP probe escalates to the provider's browser profile.
-        CI installs Chromium, so without this the leg navigated the real FT
-        site with the fixture's cookie and the verdict followed live FT.
+        Every browser escalation stays offline even when Chromium is installed.
         """
 
         def get_for_check(self, url, *, session=None, timeout=40):

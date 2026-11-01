@@ -540,15 +540,10 @@ def test_bloomberg_paid_teaser_preserves_authority_as_inconclusive(
 def test_bloomberg_promotable_partial_dom_completes_paid_proof(
     tmp_path: Path,
 ) -> None:
-    """A partly rendered but entitled article is proof, and stays cheap.
+    """A synthetic entitled article can prove access despite a partial DOM.
 
-    This previously failed closed as ``paid_probe/timeout``. Requiring the DOM to
-    cover the delivered story made cold minting impossible on a shape Bloomberg
-    serves routinely, and on this rehydration path it discarded a usable session
-    and forced an avoidable credential submission. Entitlement is still tested:
-    the neighbouring teaser case pairs the same complete payload with a rendered
-    teaser and is refused.
-    """
+    Independent payload and identity checks still apply. The neighboring teaser
+    scenario must remain non-promotable despite the same complete payload."""
 
     document = html.fromstring(_snapshot_with_full_bootstrap("full.html"))
     paragraphs = document.xpath("//article/p")
@@ -2474,8 +2469,7 @@ def test_callback_retry_handoff_reports_the_replays_own_facts(
     retry = handoffs["callback_retry"]
     assert retry["identity_callback_complete"] is True
     assert retry["identity_page_closed"] is True
-    # The exit reason must describe the replay, not carry the first popup's
-    # forward. A stale reason here is what the 2026-07-25 cold trace recorded.
+    # The synthetic replay exit reason must describe its own popup outcome.
     assert retry["identity_exit_reason"] == IdentityExitReason.CALLBACK_COMPLETE.value
     assert retry["identity_exit_reason"] != first["identity_exit_reason"]
     # The attempt's credential action stays monotonic across checkpoints.
@@ -2746,11 +2740,8 @@ def _paid_proof_browser(raw_html: bytes) -> FakeBrowser:
 def test_paid_probe_records_why_its_readiness_sampler_stopped(
     tmp_path: Path,
 ) -> None:
-    """Retrieval records this terminal; the paid probe reported only stabilized.
-
-    Without it a static incomplete render and a body that never settles are the
-    same fact, which is what forced a code dig to explain a cold failure.
-    """
+    """Synthetic readiness evidence distinguishes a stable incomplete render
+    from a body that never settles."""
 
     browser = _paid_proof_browser(FIXTURE.read_bytes())
 
@@ -2941,13 +2932,8 @@ class ReplayPopupBrowser:
 def test_google_callback_retry_traverses_the_replayed_account_chooser(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """Reproducer: a replayed popup opens on the chooser and must not strand.
-
-    Both retained Bloomberg cold failures (2026-07-24 and 2026-07-25) recorded a
-    single ``account_chooser`` observation in the callback phase and no secret
-    resolve, so the one callback-recovery path could never confirm. The 2026-07-22
-    successes that needed the same recovery did select the cached account.
-    """
+    """A synthetic replay popup at the account chooser must select its cached
+    account before the callback-recovery path can confirm completion."""
 
     parent = ParentPage()
     popup = ReplayPopupBrowser(ReplayPopupPage(), [{"account_chooser": True}, {}])
@@ -4243,13 +4229,10 @@ def test_a_blocked_callback_records_what_the_probe_saw(monkeypatch) -> None:
 def test_the_clearance_observation_is_reported_before_the_restore(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """The reading must be taken while the context is still alive.
+    """Capture synthetic clearance evidence before restore navigation.
 
-    0.3.17 recorded it after the probe's restore navigation and its challenge
-    sweep, which run against a context the settle loop may already have lost:
-    the cookie read failed, the best-effort recorder swallowed it, and a run
-    that reached the probe produced no observation at all.
-    """
+    The simulated context closes during restore. Record the observation while
+    cookies and challenge state remain readable."""
 
     class CallbackPage(ParentPage):
         def __init__(self) -> None:
@@ -4262,8 +4245,7 @@ def test_the_clearance_observation_is_reported_before_the_restore(
                 self.probes += 1
                 if self.probes == 1:
                     return type("Response", (), {"status": 403})()
-            # The settle loop losing the context is the case that produced no
-            # observation at all.
+            # Simulate context loss during restore, after the observation.
             raise RuntimeError("target closed")
 
     page = CallbackPage()
@@ -4317,14 +4299,10 @@ class _TraceContext:
 
 
 def test_clearance_facts_reach_the_trace_file(tmp_path: Path) -> None:
-    """End to end through the real recorder, not a stand-in.
+    """Synthetic clearance facts reach the actual recorder and trace file.
 
-    The adapter builds a fact dict and the runtime recorder takes explicit
-    keywords, so a fact the event models but the recorder does not accept
-    raises TypeError into `_record_identity_handoff`'s deliberate catch-all
-    and vanishes. Twice that shipped. A stub recorder cannot catch it — this
-    drives the real one and reads the trace back off disk.
-    """
+    Exercise the real keyword contract and read the trace back from disk so a
+    best-effort diagnostic guard cannot silently hide an unsupported field."""
 
     import json
 

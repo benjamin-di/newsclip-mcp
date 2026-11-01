@@ -872,11 +872,8 @@ class BloombergAcquisitionAdapter:
                             break
                         callback.wait(1)
         finally:
-            # Observed before the restore below, and in `finally` so a probe
-            # that threw still reports what it saw. The restore navigation and
-            # its challenge sweep run against a context the settle loop may
-            # already have lost; a reading taken after them is the one that
-            # gets dropped, which is why 0.3.17 recorded nothing.
+            # Capture evidence before restore navigation can lose the context.
+            # Keep this in finally so a failed probe still reports what it saw.
             clearance = _CallbackClearance(
                 cleared=cleared,
                 probe_status=status,

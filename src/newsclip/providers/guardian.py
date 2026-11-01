@@ -34,7 +34,7 @@ class GuardianProvider(ConfiguredProvider):
 
     theguardian.com is never scraped: robots.txt reserves the site for the
     publisher's own terms, while the Open Platform API is the licensed channel
-    the registered key was issued for (robots policy verified 2026-07-28).
+    the registered key was issued for, respecting the publisher's robots policy.
     The API key itself is attached as a host-scoped request header by the HTTP
     client, so it exists in no URL this module ever builds.
     """

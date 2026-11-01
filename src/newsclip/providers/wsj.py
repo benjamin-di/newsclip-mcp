@@ -14,8 +14,8 @@ from ..provider_config import ProviderSpec, load_provider_spec
 
 
 class WSJProvider(ConfiguredProvider):
-    # The retained September 14 opinion-page failures use this exact subtype.
-    # Keep it provider-local; WebPage and generic Article remain insufficient.
+    # Accept the provider-specific opinion subtype alongside NewsArticle.
+    # Generic Article and WebPage metadata remain insufficient.
     _jsonld_article_types = ("NewsArticle", "OpinionNewsArticle")
 
     def __init__(

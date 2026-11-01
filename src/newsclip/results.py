@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, model_validator
 from .errors import (
     NOT_ENTITLED_REASON,
     ContentNotFullError,
+    NewsclipError,
     OperatorActionRequiredError,
     PersistenceError,
     ProviderDefenseError,
@@ -84,9 +85,9 @@ class PublicErrorReason(StrEnum):
     ACCOUNT_CHANGED = "account_changed"
     RENDER_TIMEOUT = "browser_semantic_readiness_timeout"
     UNSEARCHABLE_QUERY = "unsearchable_query"
-    #: An imported session reached the provider but could not prove access.
-    #: Distinct from a transport failure, which is what it used to be reported
-    #: as: the request completed, so retrying the network resolves nothing.
+    #: An imported session reached the provider but did not prove access.
+    #: Unlike a transport failure, a network retry alone cannot establish
+    #: entitlement from an inconclusive completed response.
     IMPORT_VERIFICATION_INCONCLUSIVE = "import_verification_inconclusive"
     PROFILE_INVALID = "profile_invalid"
     PROFILE_IN_USE = "profile_in_use"
@@ -263,6 +264,8 @@ def public_error(error: BaseException) -> PublicErrorEnvelope | None:
     matches a published constant exactly, so the surface stays closed.
     """
 
+    if isinstance(error, NewsclipError) and error.remote_error is not None:
+        return error.remote_error
     mapped = classify_error(error)
     if mapped is None:
         return None

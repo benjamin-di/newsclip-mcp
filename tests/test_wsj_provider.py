@@ -1,10 +1,7 @@
-"""WSJ provider offline gates (F2–F7-equivalent) and recipe classification.
+"""Synthetic WSJ provider gates and recipe classification.
 
-WSJ is registered in the default composition root after its W4.3–W4.6 live
-promotion. These retained regression gates keep the FT discipline: identity
-plus positive structure gate a FULL, and neither a session-named cookie nor a
-raw word count can promote a negative fixture.
-"""
+FULL content requires matching identity and positive article structure. A
+session-named cookie or raw word count cannot promote a negative fixture."""
 
 from __future__ import annotations
 
@@ -113,8 +110,8 @@ def test_assessment_reports_a_closed_http_failure_class() -> None:
 def test_opinion_article_metadata_is_recognized(
     container: str, type_array: bool
 ) -> None:
-    # The September 14 watchdog capture has OpinionNewsArticle alongside
-    # WebPage metadata. Use only generated prose from the existing fixture.
+    # Synthetic OpinionNewsArticle metadata can coexist with WebPage metadata.
+    # All article prose comes from the generated fixture.
     fetch = _fetch("full.html", session_cookie_present=True)
     document = html.fromstring(fetch.raw_html)
     script = document.xpath("//script[@type='application/ld+json']")[0]

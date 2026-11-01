@@ -477,11 +477,9 @@ class AgedCanaryProvider(CheckProvider):
 
 
 def test_aged_out_canary_is_healthy_when_retrieval_is_full(tmp_path: Path) -> None:
-    """FT 2026-09-28: the canary ranked past page one while it still served.
+    """A synthetic aged-out canary remains healthy when retrieval is FULL.
 
-    Retrieval decides the verdict; the absence is a non-durable advisory, and
-    the real search count is reported rather than zero.
-    """
+    Report the actual search count and keep canary absence non-durable."""
 
     service, http, incidents = _service(tmp_path, AgedCanaryProvider())
 
@@ -1157,11 +1155,9 @@ class ForbiddenSessionProvider(CheckProvider):
 def test_provider_check_reads_a_bare_forbidden_on_a_dead_session_as_dead(
     tmp_path: Path,
 ) -> None:
-    """Economist 2026-08-25: 403 carrying the full article, ``loggedIn: false``.
+    """A synthetic 403 with content and signed-out evidence needs session repair.
 
-    Filing that as defense parks the provider in the one hold class the keeper
-    may never renew under, so the verdict has to come from the session probe.
-    """
+    The session verdict must precede defense classification."""
 
     defense = DefenseState(tmp_path / "defense", utc_now=lambda: NOW)
     sessions = ReadOnlySessions()

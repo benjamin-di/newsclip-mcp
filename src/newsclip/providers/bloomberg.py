@@ -246,7 +246,7 @@ class BloombergProvider(ConfiguredProvider):
 
         Bloomberg's JSON API accepts ``page=N`` without an exclude chain. Wall
         clock then tracks the slowest page rather than the sum of sequential
-        GETs, which is what previously pushed default ``limit=20`` over 2s.
+        GETs, bounding latency for queries that need multiple pages.
 
         The window is bounded, so a limit it cannot satisfy takes the exclude
         chain directly rather than paying for a fan-out whose results the

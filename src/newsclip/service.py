@@ -894,12 +894,9 @@ class NewsclipService:
             empty_search_allowed = (
                 check.allow_empty_search and page.coverage_start is not None
             )
-            # A valid, non-empty page that no longer ranks the pinned canary
-            # is ordinary aging, not a search failure: the article can still
-            # serve (FT, 2026-09-28, held at expected_result_missing while it
-            # did). Only an empty page, or one that is a served challenge,
-            # stops the check here; otherwise retrieval decides, and the
-            # absence rides along as a non-durable advisory.
+            # A valid non-empty search page can omit an aging canonical canary.
+            # Only an empty page or a served challenge stops discovery here; otherwise
+            # retrieval decides and a missing canary remains a non-durable advisory.
             canary_missing = check.require_canonical_result and not expected_present
             search_failed = not page.results and not empty_search_allowed
             if canary_missing and not search_failed:
@@ -1127,16 +1124,10 @@ class NewsclipService:
                 session_disposition=disposition,
             )
         if fetch.http_status == 403:
-            # A bare 403 — no challenge markers — is ambiguous on a session
-            # provider: the origin may be refusing a dead subscriber cookie
-            # rather than defending against the client. Economist did exactly
-            # that from 2026-08-25 (403 carrying the full server-rendered
-            # article and ``auth.loggedIn: false``), and filing it as defense
-            # blocked the one remedy — the hold class that stops the keeper
-            # renewing — for ten days. So the session verdict above runs
-            # first; only a 403 on a session that still verifies is defense.
-            # Challenges and 429 never reach here: they are classified before
-            # any further request into a provider that is already refusing.
+            # A bare 403 on a session provider can reflect a dead subscriber cookie.
+            # Use the session verdict first; only a still-verified session reaches this
+            # defense classification. Challenges and 429 are classified earlier, before
+            # any further request into an already-refusing provider.
             return self._provider_check_defended(
                 provider,
                 page,
@@ -2959,10 +2950,15 @@ class FederatedSearchPager:
         reports: list[SourceSearchReport] = []
         for state in self._states:
             reader = self._readers.get(state.provider.key)
-            contained = (
-                reader.defense_contained_until(state.provider.key) if reader else None
-            )
             error = state.terminal_error or state.retryable_error
+            contained = None
+            try:
+                if reader is not None:
+                    contained = reader.defense_contained_until(state.provider.key)
+            except PersistenceError as report_error:
+                # Containment belongs to this source too: damaged diagnostics
+                # must not discard results returned by independent sources.
+                error = error or report_error
             if error is not None:
                 reports.append(
                     _source_failure_report(

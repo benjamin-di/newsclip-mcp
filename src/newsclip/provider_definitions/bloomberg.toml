@@ -63,11 +63,8 @@ endpoint = "https://www.bloomberg.com/nemo-next/api/search/query"
 [check]
 query = "Moonshot winners losers AI trade"
 canonical_url = "https://www.bloomberg.com/news/articles/2026-07-20/moonshot-ai-is-creating-new-winners-and-losers-in-the-ai-trade"
-# Nemo search ranks by recency over relevance: this article answered the query
-# through 2026-08-07 and had fallen out of the first window by 2026-08-23,
-# which held the canary at expected_result_missing for two weeks while the
-# article itself still served. Same posture as reuters/ap: a non-empty search
-# page proves the search leg; retrieval of canonical_url proves serving.
+# Recency-ranked search can omit an older canonical article. A non-empty
+# search page proves discovery; canonical retrieval proves serving.
 require_canonical_result = false
 
 [assessment]
@@ -88,9 +85,9 @@ minimum_words = 250
 # Anything this floor newly admits is by construction an article the rendered
 # floor rejected, which routes it through a live session probe before it can be
 # promoted; a relaxed payload floor therefore cannot admit an unverified body.
-# 250 rejected a complete 205-word wire story. 120 is a reasoned round number,
-# not a measured one: the local corpus holds ten payloads whose minimum is that
-# same 205-word article, so nothing calibrates the 120-205 band.
+# Keep this lower than the rendered-body floor so short complete wire stories
+# can reach the additional session-verification step. This length alone does
+# not establish full content or entitlement.
 story_minimum_words = 120
 
 [assessment.paragraph_floor]

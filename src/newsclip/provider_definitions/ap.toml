@@ -23,7 +23,7 @@ lowercase_groups = ["id"]
 
 # ApProvider parses the official news sitemap; apnews.com/robots.txt closes
 # site search to everyone and explicitly publishes this sitemap as the
-# intended discovery surface (verified 2026-07-28).
+# intended discovery surface.
 [search]
 kind = "adapter"
 endpoint = "https://apnews.com/news-sitemap-content.xml"
@@ -38,7 +38,7 @@ require_canonical_result = false
 [assessment]
 canonical_signal = "canonical_article_url"
 # AP renders no <article> element; the story body carries the
-# RichTextStoryBody class (observed 2026-07-28). A Page-main fallback is
+# RichTextStoryBody class. A Page-main fallback is
 # deliberately omitted: every AP page — hubs, galleries, live pages — renders
 # inside Page-main, so it would satisfy article_body_structure on non-articles
 # and promote a canonical-bearing hub page as FULL.
@@ -46,7 +46,7 @@ article_xpath = [
   "//*[contains(concat(' ', normalize-space(@class), ' '), ' RichTextStoryBody ')]",
 ]
 required_signals = ["newsarticle_jsonld", "jsonld_headline", "article_body_structure", "markdown_body", "extracted_headline"]
-# Observed in the retained 2026-09-05 HTTP403; require the interstitial title
+# Require the interstitial title
 # and challenge-platform script together, not a story mentioning Cloudflare.
 [[assessment.negative_rules]]
 kind = "challenge"

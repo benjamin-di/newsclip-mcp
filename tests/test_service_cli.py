@@ -1912,11 +1912,10 @@ def test_public_envelope_ignores_a_foreign_incident_attribute() -> None:
 def test_human_failure_surfaces_the_incident_reference_the_hint_points_at(
     monkeypatch,
 ) -> None:
-    """The content-not-full hints tell the operator to inspect the evidence.
+    """Content-not-full CLI output names the retained private incident.
 
-    That instruction is only actionable if the human surface names the
-    incident, which previously only JSON callers received.
-    """
+    Evidence inspection must be actionable from the human-facing result as well
+    as from its structured JSON representation."""
 
     incident_id = f"incident-{'b' * 24}"
 

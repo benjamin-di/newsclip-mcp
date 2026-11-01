@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 from threading import Barrier, Event
 from time import monotonic
 
 import pytest
 from pydantic import ValidationError
 
+from newsclip.defense import DefenseState
 from newsclip.errors import (
     OperatorActionRequiredError,
     PersistenceError,
@@ -579,11 +581,7 @@ def test_every_transport_category_has_a_publishable_envelope(
 def test_a_provider_answered_refusal_is_named_in_its_source_report(
     category: TransportFailure, reason: SourceSearchReason
 ) -> None:
-    """This report is what the outer watchdog pages on.
-
-    Reporting a throttling or erroring provider as ``transport`` there is what
-    sent the 2026-08-10 FT page's reader looking for a tunnel fault.
-    """
+    """Synthetic provider refusals remain distinct from transport failures."""
 
     refused = SearchProvider(
         "refused", error=ProviderTransportError("fixture refusal", category=category)
@@ -694,12 +692,9 @@ def test_source_report_rejects_inconsistent_missing_publication_counts() -> None
 
 
 def test_unsearchable_query_is_a_request_fault_not_a_provider_outage() -> None:
-    """The caller's query failed, so no surface may blame the provider route.
+    """A synthetic unsearchable query is a request fault, not provider failure.
 
-    Before this, the CLI answered "provider transport failed" with a hint to run
-    'newsclip doctor' — sending someone to diagnose a healthy provider — and a
-    script retrying on transport errors would retry a query that can never work.
-    """
+    No surface may recommend network repair or retry for that deterministic input."""
 
     rejecting = SearchProvider("rejecting", error=UnsearchableQueryError("q"))
 
@@ -880,6 +875,48 @@ def test_broken_session_preflight_is_partial_provider_failure() -> None:
         SourceSearchState.OK,
     ]
     assert response.sources[0].reason is SourceSearchReason.PERSISTENCE
+
+
+@pytest.mark.parametrize(
+    ("search_error", "reason"),
+    [
+        (PersistenceError("fixture storage failure"), SourceSearchReason.PERSISTENCE),
+        (
+            SessionRequiredError("fixture session failure"),
+            SourceSearchReason.SESSION_REQUIRED,
+        ),
+        (None, SourceSearchReason.PERSISTENCE),
+    ],
+)
+def test_corrupt_defense_report_preserves_healthy_federated_results(
+    tmp_path: Path,
+    search_error: Exception | None,
+    reason: SourceSearchReason,
+) -> None:
+    defense_root = tmp_path / "defense"
+    defense_root.mkdir(mode=0o700)
+    (defense_root / "damaged.defense.json").write_text("{broken", encoding="utf-8")
+    damaged = SearchProvider("damaged", error=search_error)
+    healthy = SearchProvider("healthy", [_result("healthy", "one")])
+    service = NewsclipService(
+        ProviderRegistry([damaged, healthy]),
+        FakeHttp(),
+        FakeExtractor(),
+        defense=DefenseState(defense_root),
+        network_sleep=lambda _seconds: None,
+    )
+
+    response = service.search_many("markets")
+
+    assert [item.provider for item in response.results] == ["healthy"]
+    damaged_report, healthy_report = response.sources
+    assert damaged_report.reason is reason
+    assert damaged_report.retrieval_contained_until is None
+    assert healthy_report.state is SourceSearchState.OK
+    assert healthy_report.result_count == 1
+    # Reporting isolation must not make corrupt retrieval authority readable.
+    with pytest.raises(PersistenceError, match="malformed"):
+        service.defense_contained_until("damaged")
 
 
 def test_all_selected_failures_prioritize_session_required() -> None:

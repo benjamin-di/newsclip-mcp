@@ -212,18 +212,11 @@ class GuardAcknowledgement(FrozenModel):
 
 
 class AcknowledgementReport(FrozenModel):
-    """Both facts an acknowledgement produces: the clear, then fresh evidence.
+    """Report both acknowledgement facts: the clear and fresh follow-up evidence.
 
-    Clearing a hold re-enables scheduled checks but leaves the last serving
-    evidence as old as the hold made it, so health honestly reports `unknown`
-    until something re-measures the provider (Economist sat there for a day,
-    2026-08-01). The follow-up check is the action a reviewer should always
-    take next; the guard performs it implicitly after a successful
-    compare-and-clear. A follow-up failure never un-acknowledges — the clear
-    stands and the failure is reported beside it. A follow-up that classifies
-    a durable failure writes a fresh hold; "acknowledged, then immediately
-    re-held" is the honest outcome when the condition still stands.
-    """
+    A cleared hold leaves old serving evidence until the follow-up check runs.
+    Its failure does not undo acknowledgement, but a durable failure can write
+    a new hold. Compare-and-clear prevents acknowledging a replaced hold."""
 
     acknowledgement: GuardAcknowledgement
     follow_up: GuardResult | None = None
@@ -881,21 +874,12 @@ class ProviderGuard:
     def clear_session_evidence(
         self, provider: str, *, hold_id: str | None
     ) -> ProviderHold | None:
-        """Clear a session-evidence hold because new evidence just verified.
+        """Clear only a session-evidence hold after positive session verification.
 
-        Called only from positive live session-verification events (mint,
-        cookie promotion, checkpoint). Those holds name session renewal or
-        promotion as their remedy; once a session positively verifies against
-        the provider, keeping the hold blocks the keeper forever for a
-        ceremony no judgement attends (the 2026-07-25 FT trap). Every other
-        hold class — defense, operator, local-state, incident review — is
-        untouched: verified session evidence says nothing about those.
-
-        Returns the cleared hold, or None when nothing was cleared. The
-        caller captures hold_id before verification starts. Compare-and-clear
-        runs under the store lock; a hold created or replaced since that
-        capture cannot be cleared by the older verification.
-        """
+        Mint, promotion and checkpoint callers capture the hold ID before starting
+        verification. Defense, operator, local-state and incident-review holds are
+        untouched: session verification says nothing about those conditions.
+        Return the cleared hold, or None when no matching hold was cleared."""
 
         self._registry.get(provider)
         if hold_id is None:

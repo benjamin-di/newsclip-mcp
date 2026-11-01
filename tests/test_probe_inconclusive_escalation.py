@@ -112,7 +112,7 @@ def test_a_single_inconclusive_probe_stays_a_retryable_failure(
 def test_an_inconclusive_streak_escalates_to_verification_review(
     tmp_path: Path,
 ) -> None:
-    """The eight-day Bloomberg loop must end in an actionable escalation."""
+    """Repeated synthetic inconclusive probes reach an actionable escalation."""
 
     sessions = _InconclusiveSessions()
     keeper = _keeper(tmp_path, sessions)
@@ -256,12 +256,9 @@ def test_alternating_reasons_still_accumulate(tmp_path: Path) -> None:
 
 
 def test_escalation_holds_and_does_not_flap(tmp_path: Path) -> None:
-    """Once escalated it must STAY escalated while the condition persists.
+    """Synthetic escalation remains latched while the unresolved condition persists.
 
-    The first implementation keyed on the previous outcome's reason, so the
-    escalation itself (session_verification_unresolved) stopped matching and the
-    keeper went straight back to probing — an alternation, not a stop.
-    """
+    Changing the latest outcome reason must not restart the probe loop."""
 
     sessions = _InconclusiveSessions()
     keeper = _keeper(tmp_path, sessions)

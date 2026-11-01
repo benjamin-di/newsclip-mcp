@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal, get_args
+from typing import TYPE_CHECKING, Any, Literal, get_args
 from uuid import UUID
 
 from pydantic import (
@@ -16,11 +16,21 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from signin_window.automation.auth import AuthOutcome as _AuthOutcome
 
 from .account_keys import ACCOUNT_KEY_PATTERN
 
-MintOutcome = _AuthOutcome
+if TYPE_CHECKING:
+    pass
+
+
+def __getattr__(name: str):
+    # Local acquisition keeps the shared enum identity. Remote article models
+    # do not need the browser automation package just to validate a response.
+    if name == "MintOutcome":
+        from signin_window.automation.auth import AuthOutcome
+
+        return AuthOutcome
+    raise AttributeError(name)
 
 
 class FrozenModel(BaseModel):
@@ -112,17 +122,9 @@ class ProviderCapabilities(FrozenModel):
     # assessment").
     retrieval_transport: Literal["http", "browser"] = "http"
     search_transport: Literal["http", "browser"] = "http"
-    # A public provider may need a declared TLS/browser fingerprint while
-    # remaining anonymous. Challenges still fail closed; this changes only
-    # the ordinary HTTP handshake.
-    #
-    # An allowlist, not a passthrough to curl_cffi's 53 profiles: a pinned
-    # fingerprint is a measurement of an adaptive edge and decays, so every
-    # entry here is one somebody characterized against a live provider.
-    # `chrome131_android` (refused 2026-07-28) and `chrome146` (refused
-    # 2026-08-01) stay listed as names a definition may still carry, but
-    # neither should be pinned again without fresh evidence. `safari2601`
-    # was measured full 5/5 plus a second-article confirmation on 2026-08-01.
+    # A public provider may declare an anonymous TLS/browser fingerprint.
+    # Challenges still fail closed. Keep the allowlist bounded and require fresh
+    # provider evidence before pinning a profile; edge compatibility can decay.
     http_impersonate: HttpImpersonation = DEFAULT_HTTP_IMPERSONATION
     # When an HTTP fetch is classified as the provider's interactive
     # challenge, escalate that one retrieval to a single bounded browser

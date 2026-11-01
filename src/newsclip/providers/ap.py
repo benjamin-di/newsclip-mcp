@@ -30,8 +30,8 @@ _SITEMAP_NAMESPACES = {
     "sitemap": "http://www.sitemaps.org/schemas/sitemap/0.9",
     "news": "http://www.google.com/schemas/sitemap-news/0.9",
 }
-# The sitemap is one unpaginated document (~450 entries live); the ceiling is a
-# drift guard against a pathological payload, not a paging contract.
+# The sitemap is one unpaginated document. Bound pathological payloads without
+# treating the entry ceiling as a paging contract.
 _MAX_ENTRIES = 5_000
 _SEARCH_TIMEOUT_SECONDS = 8
 _MAX_SITEMAP_BYTES = 2_000_000
@@ -103,11 +103,9 @@ class ApProvider(ConfiguredProvider):
             raise UnsearchableQueryError("unsearchable_query")
         candidates: list[tuple[int, SearchResult]] = []
         seen: set[str] = set()
-        # AP's news sitemap is a moving window, not an archive — a live sample
-        # spanned 47 hours across 445 entries. Report its trailing edge so a
-        # small honest result count is not read as "AP has nothing on this".
-        # Only owned entries count: a non-article URL further back would claim
-        # reach the search never had.
+        # Report the trailing edge of this moving sitemap window. A small
+        # result count cannot establish absence outside the fetched window.
+        # Only owned articles contribute to the reported coverage.
         coverage_start: datetime | None = None
         for raw_url, headline, published in self._sitemap_entries(http):
             normalized = self.normalize_url(raw_url)

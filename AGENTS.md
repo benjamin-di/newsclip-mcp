@@ -30,7 +30,7 @@ agent instruction file; do not add CLAUDE.md or GEMINI.md.
 
 ## Verify and contribute
 
-Use `uv sync --locked --extra mcp --extra signin`, install the Patchright
+Use `uv sync --locked --extra local --extra mcp --extra signin`, install the Patchright
 Chromium, then run `make check` and `make check-mcp`. Add synthetic browser and
 user-isolation acceptance for changes to those paths. Live checks are explicit
 private operator actions; never put credentials or live content in public CI.

@@ -471,8 +471,7 @@ def test_detector_treats_the_invisible_recaptcha_badge_as_an_asset(
     detector_page: Page,
     detector,  # noqa: ANN001
 ) -> None:
-    # AP article pages carry this badge; it asked nobody for anything, yet it
-    # armed provider defense on served articles (2026-09-29).
+    # This synthetic article badge is passive and must not arm defense.
     detector_page.goto("about:blank")
     detector_page.set_content(
         """

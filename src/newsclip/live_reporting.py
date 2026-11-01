@@ -1635,10 +1635,8 @@ def _read_baseline(path: Path) -> LiveSuccessBaseline | None:
         payload = json.loads(path.read_bytes())
     except (OSError, ValueError):
         return None
-    # Normalize before validating so an alias conflict stays distinguishable:
-    # pydantic would fold it into a ValidationError that is indistinguishable
-    # from ordinary schema drift, and a swallowed conflict is what previously
-    # degraded a conflicted baseline to "no baseline".
+    # Normalize before validation to distinguish alias conflicts from ordinary
+    # schema drift. A conflicted baseline must not degrade to an absent one.
     try:
         normalized = _normalize_legacy_http_fields(payload, _BASELINE_HTTP_ALIASES)
     except ValueError as error:

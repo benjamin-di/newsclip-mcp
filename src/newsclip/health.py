@@ -1,15 +1,7 @@
-"""One read-only snapshot of every provider's operational health.
+"""Compose a read-only snapshot of provider health without provider requests.
 
-The per-provider answers already existed but were scattered across four
-stores and three commands, so "is the fleet healthy?" meant running
-`auth status`, `provider-guard`, and reading keeper logs per provider — the
-shape of question that went unanswered for eight days in the 2026-07-28
-audit. This composes them once, contacting no provider.
-
-Deliberately shared: the CLI `health` command and the ops MCP `health` tool
-both call this, so the operator over SSH and the agent over MCP get the same
-answer from one implementation.
-"""
+The CLI and ops MCP health surfaces share this implementation, combining
+session freshness, guard state and keeper outcomes from local stores."""
 
 from __future__ import annotations
 

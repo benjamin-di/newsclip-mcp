@@ -2073,14 +2073,8 @@ def test_a_failed_redate_does_not_fail_a_proven_session(tmp_path: Path) -> None:
 def test_inconclusive_import_is_not_reported_as_a_transport_failure(
     tmp_path: Path,
 ) -> None:
-    """The provider answered; the answer did not prove access.
-
-    Reporting that as transport tells the caller to retry the network, which
-    resolves nothing — a promoted Bloomberg session was retried twice against
-    an identical `retryable: true` before anyone questioned the word
-    (2026-07-28). This is the distinction the keeper's paid probe already
-    draws, applied to the import path.
-    """
+    """An inconclusive synthetic response is an account-verification condition,
+    not a retryable transport failure."""
 
     from newsclip.results import PublicErrorAction, PublicErrorCategory, public_error
 
@@ -2133,13 +2127,8 @@ def _challenge_cookie(name: str) -> dict[str, object]:
 
 
 def test_imported_challenge_vendor_cookies_are_dropped(tmp_path: Path) -> None:
-    """Another host's defense cookies are worse than sending nothing.
-
-    They attest that one particular address and fingerprint was found
-    acceptable, so replaying them elsewhere is the exact mismatch the vendor
-    looks for: importing a workstation's PerimeterX cookies onto the NAS made
-    the verification page smaller than an anonymous fetch (2026-07-28).
-    """
+    """Synthetic challenge cookies do not transfer publisher session authority
+    between browser or network contexts."""
 
     store = _store(tmp_path / "state")
     payload = _cookie_payload("PUBLISHER_AUTH") + [

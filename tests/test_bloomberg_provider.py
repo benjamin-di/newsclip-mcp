@@ -270,7 +270,7 @@ def test_bulleted_wrap_payload_is_a_complete_entitled_article() -> None:
 
 
 def test_bulleted_wrap_completes_both_completeness_contracts() -> None:
-    """Rejecting the payload previously failed the read path and paid proof alike."""
+    """A synthetic bulleted story satisfies both read-path and paid-proof contracts."""
 
     provider = BloombergProvider()
     fetch = _fetch("bulleted-wrap.html", session_cookie_present=True)
@@ -347,8 +347,7 @@ def test_paid_proof_accepts_a_partially_rendered_entitled_article() -> None:
     assert partial_assessment.access_state is AccessState.FULL
     assert partial_assessment.promotable is True
     assert partial.complete is True
-    # Coverage is retained as evidence, and it is below the floor that used to
-    # gate the proof.
+    # Retain coverage evidence even when it is below the rendered-body floor.
     assert partial.coverage is not None
     assert 0.75 <= partial.coverage < 0.9
 

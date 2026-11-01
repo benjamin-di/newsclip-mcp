@@ -870,15 +870,9 @@ class SessionStore:
             allowed_domains=recipe.allowed_cookie_domains,
             now=now,
         )
-        # Dropped on import, kept on mint. A challenge-vendor cookie attests
-        # that one particular host was found acceptable, so replaying another
-        # host's is never right — and is worse than sending nothing: importing
-        # a workstation's PerimeterX cookies onto the NAS made Bloomberg's
-        # verification page smaller than an anonymous fetch (49 words against
-        # 245), because the import itself tripped the defense. The mint path
-        # normalizes through `normalize_browser_cookie_export` and is
-        # deliberately untouched: there the cookies belong to this host, and
-        # HTTP replay may still need them.
+        # Drop challenge-vendor cookies from portable imports because their
+        # context binding does not transfer between hosts. Minted cookies remain
+        # unchanged: they belong to the browser context that produced them.
         cookies = tuple(
             cookie for cookie in cookies if not is_challenge_vendor_cookie(cookie.name)
         )
@@ -926,12 +920,8 @@ class SessionStore:
             if verdict is SessionDisposition.DEAD:
                 raise SessionRequiredError("imported cookies failed verification")
             if verdict is SessionDisposition.INCONCLUSIVE:
-                # Not a transport failure. The provider answered; the answer
-                # simply did not prove paid access, so retrying the network
-                # resolves nothing and "retry_later" sends the operator in a
-                # circle (observed 2026-07-28: two identical retries of a
-                # Bloomberg promotion, each reported retryable). The same
-                # distinction the keeper's paid probe already draws.
+                # An inconclusive response did not prove entitlement. Retrying the
+                # network alone cannot resolve this account-verification condition.
                 raise OperatorActionRequiredError(
                     _IMPORT_VERIFICATION_INCONCLUSIVE,
                     provider=provider,

@@ -1,9 +1,7 @@
 """Durable per-provider keeper outcomes, and the health they imply.
 
-`session_status` used to answer "when did verification last succeed" and
-nothing else, so a session whose renewals had failed hourly for days still
-read as ``verified``. Consumers trusted that word and spent real retrieval
-attempts against dead sessions (the 2026-07-28 Bloomberg audit finding).
+A verification timestamp alone cannot represent subsequent renewal failures.
+Combine it with durable keeper outcomes before deriving session health.
 
 The keeper is the one actor that knows renewal reality, but it runs in a
 different process from the readers, so its last outcome — and the renewal
@@ -101,13 +99,9 @@ class KeeperOutcome(FrozenModel):
     credential_attempt: bool = False
     recorded_at: datetime
     consecutive_renewal_failures: int = Field(default=0, ge=0)
-    #: Renewals that specifically could not prove entitlement. Counted apart
-    #: from the general streak because the remedies differ: a run of these
-    #: means the session is unentitled and needs promoting, while transport
-    #: failures mean the route is unhealthy. Observed live on 2026-07-28,
-    #: Bloomberg alternates between the two, so a check on the *latest* reason
-    #: alone never accumulates. An unrelated failure preserves this count
-    #: rather than resetting it; only a successful renewal clears it.
+    #: Count unresolved-entitlement renewals separately from transport failures.
+    #: Alternating failure categories must not hide this streak. Unrelated
+    #: failures preserve it; only a successful renewal clears it.
     consecutive_inconclusive: int = Field(default=0, ge=0)
     #: When the latched escalation last spent its one contradicting-evidence
     #: canary (the guarded check that may let a renewal through the latch).
@@ -454,10 +448,8 @@ def enrich_session_health(
     The deep-age rule says "the keeper has evidently not managed to renew this
     for several windows", which presupposes a keeper. On a host that runs none
     — a workstation using the CLI directly — there is no outcome history, and
-    an old session is simply overdue, not failing: a laptop Bloomberg session
-    last verified six days earlier still returned a full article while being
-    reported ``degraded``. Without keeper evidence the deep-age rule is
-    therefore skipped, and age can raise ``stale`` but never ``degraded``.
+    an old session is simply overdue, not failing. Without keeper evidence the
+    deep-age rule is skipped, and age can raise ``stale`` but never ``degraded``.
     """
 
     max_age_hours = outcome.max_age_hours if outcome else DEFAULT_MAX_AGE_HOURS

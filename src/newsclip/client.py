@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -25,6 +26,7 @@ from .models import (
     SearchResponse,
     SessionHealth,
 )
+from .results import PublicErrorEnvelope
 
 
 class NewsclipClient:
@@ -77,9 +79,15 @@ class NewsclipClient:
             data = response.json()
         except (httpx.HTTPError, ValueError) as error:
             raise ProviderTransportError("Newsclip server is unavailable") from error
-        if not isinstance(data, dict) or "ok" not in data:
+        if not isinstance(data, dict) or type(data.get("ok")) is not bool:
             raise ProviderTransportError("invalid Newsclip server response")
         if not data["ok"]:
+            try:
+                envelope = PublicErrorEnvelope.model_validate(data)
+            except ValueError as error:
+                raise ProviderTransportError(
+                    "invalid Newsclip server error", retryable=False
+                ) from error
             errors = {
                 "usage": UsageError,
                 "operator_action": OperatorActionRequiredError,
@@ -89,8 +97,12 @@ class NewsclipClient:
             }
             error_type = errors.get(str(data.get("category")), ProviderTransportError)
             # The server's closed vocabulary is safe; raw remote errors are not.
-            raise error_type(
-                data.get("reason") or data.get("message", "operation failed")
+            remote_failure = error_type(envelope.message.value)
+            remote_failure.remote_error = envelope
+            raise remote_failure
+        if "result" not in data:
+            raise ProviderTransportError(
+                "invalid Newsclip server response", retryable=False
             )
         return data["result"]
 
@@ -151,10 +163,16 @@ class NewsclipClient:
         del acquire_session
         article = Article.model_validate(self.request("save", url=url))
         if out is not None:
-            from .private_state import atomic_private_write
-
             out.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            atomic_private_write(out, (article.body_markdown + "\n").encode())
+            fd, temporary = tempfile.mkstemp(dir=out.parent, prefix=".newsclip-")
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write((article.body_markdown + "\n").encode())
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, out)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
         return article
 
     def archive_get(self, article_id: str) -> Article:

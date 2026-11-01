@@ -23,17 +23,11 @@ class SessionCookieFormatError(SessionCookieError):
     """Cookie input was present but structurally malformed."""
 
 
-#: Cookie names issued by challenge vendors rather than by the publisher.
-#: These carry no session authority: they attest that *one particular host*
-#: — its address, its browser fingerprint — was found acceptable. Only the
-#: PerimeterX names are evidenced (2026-07-28, a Bloomberg promotion), but
-#: the reason is structural rather than vendor-specific, so the DataDome and
-#: Cloudflare names are included on the same principle.
+#: Challenge-vendor cookies bind a browser fingerprint and network context,
+#: not publisher session authority. Drop them from portable imports.
 #:
-#: Deliberately tighter than `bloomberg_auth._is_perimeterx_cookie`, which
-#: matches a bare ``px`` prefix. That predicate only asks whether a defense
-#: left a mark, where a false positive costs nothing; here a false positive
-#: silently discards a real credential.
+#: Keep this predicate tighter than the diagnostic bare px-prefix check:
+#: a false positive here could discard an actual publisher credential.
 _CHALLENGE_VENDOR_COOKIE_NAMES = frozenset(
     {
         "pxcts",  # PerimeterX, the one name without the underscore prefix

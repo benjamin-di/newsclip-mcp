@@ -2,19 +2,16 @@
 # Gateway copy: VENDORED from newsclip/scripts/synthetic_route_check.py, verbatim.
 """Outer watchdog: exercise the public MCP route from an external vantage.
 
-Guardian was completely dead on the public route for roughly four days
-while every internal monitor reported it healthy. No provider mechanic
-could catch that class: monitoring ran in the token-holding keeper and
-serving ran in a container that deliberately holds no credentials, so the
-fault was *where the check ran from* (ARCHITECTURE, "Public-route watchdog").
+An internal monitor can succeed while a public route is broken. Check from
+outside the serving host to exercise client admission and routing as well
+as provider behavior.
 
 This runs off the serving host and calls the authenticated public MCP route
 through the gateway exactly as a client does:
 
 1. the route answers at all; and
 2. no source reports a **local or configuration-class fault** — a missing
-   API key, unreadable local state, or an operator-action condition, which
-   is precisely Guardian's class.
+   API key, unreadable local state, or an operator-action condition.
 
 With persistent --state configured, it also rotates one provider-scoped
 search/get sample every 15 minutes. The product must return an assessed FULL
@@ -29,10 +26,10 @@ One article is not the provider. The sample searches up to five results and
 reads the first not among the provider's last five failed samples; the
 journal keeps only a 12-hex SHA-256 prefix of each URL, never the URL. A
 streak of `content_not_full` reads that all hit one identical URL is
-`article_sample_stuck`: reported, never paged (a single unentitled article
-that stays a publisher's top hit for hours once paged a provider DOWN that
-served every other article). `not_entitled` (session verified, article
-outside the subscription) is a sample problem: it neither extends nor clears
+`article_sample_stuck`: reported, never paged. An unentitled top result
+alone cannot establish that the whole provider is unavailable.
+`not_entitled` (session verified, article outside the subscription) is a sample
+problem: it neither extends nor clears
 a streak and steers the next sample elsewhere. A sample search that returns
 nothing for --threshold consecutive checks is reported as `search_empty`
 without paging.
@@ -40,16 +37,14 @@ without paging.
 A source in a legible contained or held state does **not** fail the check.
 Those are handled conditions the deployment is designed to sit in; the
 keeper deliberately does not page for them, and a watchdog that turned
-every defense cooldown into an external alert would rebuild the alert
-fatigue that made Guardian's detection accidental in the first place.
+every defense cooldown into an external alert would create alert fatigue.
 Persistence is the escape hatch: a source that stays not-ok across
 consecutive runs pages regardless of class, because a handled state that
 never resolves has stopped being handled.
 
 Transport faults get the same skepticism at a smaller scale: a 5xx or an
 unreachable route is indistinguishable from a seconds-long gateway blip
-on a single sample (2026-08-05: an 8-second health-gate window paged as
-`route_http_503`), so it earns one bounded retry before paging. Auth,
+on a single sample, so it earns one bounded retry before paging. Auth,
 redirect and payload faults never wait — time does not fix a credential.
 
 The probe never invokes login or repair tools. An ordinary get may request
@@ -77,9 +72,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-#: Per-source reasons that mean the serving deployment itself is broken:
-#: a credential or key it cannot resolve, an operator-action condition, or
-#: local state it cannot read. Guardian's outage was the first of these.
+#: Per-source reasons indicating a local credential, configuration or storage fault.
 FAULT_REASONS = frozenset(
     {
         "session_required",
@@ -95,10 +88,8 @@ DEFAULT_PERSISTENCE_THRESHOLD = 3
 DEFAULT_QUERY = "markets"
 DEFAULT_TIMEOUT_SECONDS = 120.0
 
-#: Seconds before the single transport-fault retry. Comfortably longer than
-#: the ~10s gateway health-gate window that produced the 2026-08-05 false
-#: page, and far inside the 15-minute run cadence even with two
-#: full-timeout attempts.
+#: Seconds before the single transport-fault retry. This allows a brief
+#: gateway transition to settle while bounding the total check duration.
 ROUTE_RETRY_DELAY_SECONDS = 30.0
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 _PROTOCOL_VERSION = "2025-03-26"
@@ -375,8 +366,7 @@ def run_check_with_retry(
 
     A blip shorter than `delay` becomes a green run that still records
     `attempt=2` in the ping body, so the event stays visible without
-    paging. A fault that outlives the retry pages one `delay` later than
-    it used to — nothing against a 15-minute dead-man cadence.
+    paging. A fault that outlives the retry pages after the bounded delay.
     """
 
     try:
@@ -620,7 +610,7 @@ def _is_url_hash(value: object) -> bool:
 def _avoided(value: dict[str, Any]) -> list[str]:
     """URL hashes of a provider's recent failed samples, oldest first.
 
-    Reads the single `avoid_url_hash` of journals before 2026-10-15 as a one-entry list.
+    Reads a legacy single `avoid_url_hash` as a one-entry list.
     """
 
     if "avoid_url_hashes" in value:
@@ -960,9 +950,8 @@ def _fold_sample(  # noqa: PLR0913
     )
     if sampled is not None:
         outcome["url_hash"] = sampled
-    # Every recently failed URL is stepped past, not only the last one: two
-    # unreadable results on top of a search (Bloomberg's `markets` podcasts,
-    # 2026-10-15) otherwise alternate into a paging streak of distinct URLs.
+    # Step past every recently failed URL so alternating non-article results
+    # cannot manufacture a streak of distinct unreadable articles.
     avoid = _avoided(prior)
     if sampled is not None and outcome["observation"] == "failed":
         avoid = [*(h for h in avoid if h != sampled), sampled]

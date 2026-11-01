@@ -1,10 +1,6 @@
-"""Every outcome needing a person carries the call that fixes it (R4).
+"""Fixed repair hints name the next action without exposing provider text.
 
-An alert naming only the failure sends the reader hunting runbooks — knowing
-Bloomberg said "transport failure" helped nobody for eight days. The hint is
-templated on the provider key alone, so no provider text or secret can ride
-out on an alert.
-"""
+Synthetic outcomes exercise provider-key templating and safe next steps."""
 
 from __future__ import annotations
 
@@ -27,9 +23,8 @@ def test_healthy_outcomes_carry_no_hint() -> None:
 
 
 def test_promotion_escalation_leads_with_verification() -> None:
-    """Verify-then-heal comes before promote: a latched escalation can be a
-    probe that could not read its page (2026-08-06 Bloomberg), and promoting
-    a working session is the wrong repair."""
+    """A synthetic probe-read failure recommends verification before replacing
+    a potentially working session."""
 
     result = _result(
         KeeperAction.OPERATOR_ACTION_REQUIRED, "session_promotion_required"
@@ -108,8 +103,8 @@ def test_hint_never_contains_anything_but_the_provider_key(reason: str | None) -
 
 
 def test_challenged_renewal_with_refused_reads_names_the_fingerprint_repair() -> None:
-    """2026-10-19: FT's renewal probe and reads were refused while the browser
-    served — the session was fine and chrome146 had aged."""
+    """Synthetic browser-recovered reads distinguish fingerprint repair from
+    replacement of a potentially valid session."""
 
     result = KeeperResult(
         provider="ft",

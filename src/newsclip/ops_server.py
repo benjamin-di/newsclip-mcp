@@ -63,10 +63,8 @@ OPS_TOOLS = (
 
 OPS_SERVER_INSTRUCTIONS = (
     "Repair surface for newsclip providers. Use health for the one-call "
-    "fleet overview (session freshness, defense cooldowns, holds, running "
-    "heals, and the identity targets' holds, cooldowns and snapshot age; an "
-    "identity hold is cleared only by the keeper's identity acknowledge, never "
-    "by acknowledge_hold). heal starts one bounded repair for a provider and returns "
+    "provider overview (session freshness, defense cooldowns, holds and running "
+    "heals). heal starts one bounded repair for a provider and returns "
     "immediately; after a successful newer provider_check it can consume that "
     "proof for one credential-free exact recovery check. Poll health for its "
     "outcome. provider_check runs one guarded canary. session_promote imports "

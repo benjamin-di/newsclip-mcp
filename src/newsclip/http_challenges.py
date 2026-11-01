@@ -1,17 +1,9 @@
-"""HTTP legs a session provider's edge refused while the browser served.
+"""Record HTTP challenges recovered by a session provider's browser fallback.
 
-FT is a session provider that retrieves over HTTP and escalates a challenged
-read to the browser. Readers never see such a refusal: the article arrives.
-It is still the earliest sign that the HTTP fingerprint has aged — on
-2026-10-19 FT's Cloudflare challenged chrome146 16/16 while chrome150 passed
-16/16 from the same host — and for three weeks it surfaced only as renewal
-pages, because the renewal probe has no browser leg to hide it.
-
-Session routes stay outside the R8 runtime pin, so this records the fact and
-changes nothing else: no transport selection, no defense arm, no request.
-Health reports the counts; the keeper names the repair when a renewal is
-challenged while recent reads were too.
-"""
+Successful browser fallback can hide an aging HTTP fingerprint from readers.
+Keep these observations visible to health and keeper repair hints without
+changing transport selection, arming defense or making another request.
+Session routes remain outside the anonymous runtime transport-pin policy."""
 
 from __future__ import annotations
 

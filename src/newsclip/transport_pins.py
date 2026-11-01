@@ -47,9 +47,8 @@ class TransportPinState(FrozenModel):
     #: The promoted runtime pin, or None when the TOML pin governs.
     active_profile: str | None = None
     pinned_at: AwareDatetime | None = None
-    #: How many separate full passes promoted this pin. One pass cannot tell
-    #: a good profile from a stochastic one, which is why promotion needs
-    #: several (the 07-24 matrix rejected a profile for exactly that).
+    #: Separate full passes supporting this pin. Require repeated evidence
+    #: to distinguish stable compatibility from a stochastic success.
     passes_observed: int = Field(default=0, ge=0)
     #: Rot: the pinned profile was refused while the browser served (R8).
     rot_observed_at: AwareDatetime | None = None
@@ -192,12 +191,9 @@ class TransportPinStore:
         profile: str,
         promote_at: int,
     ) -> TransportPinState:
-        """Count one full pass for a candidate, promoting on the third.
+        """Count a full candidate pass and promote after the configured threshold.
 
-        Three passes rather than one because the 07-24 matrix rejected a
-        profile for being stochastic, and a single pass cannot tell that
-        apart from a good one.
-        """
+        Repeated independent passes reduce promotion of a stochastic profile."""
 
         if profile not in HTTP_IMPERSONATION_PROFILES:
             raise TransportPinError("transport pin profile is outside the allowlist")
@@ -366,13 +362,9 @@ class TransportPinStore:
             raise TransportPinError("transport pin root is unavailable") from error
 
 
-#: How long a rot signal sends retrieval straight to the browser. Leading
-#: every read with a profile the edge already refused is retrying into an
-#: active defense: Reuters spent six days (2026-10-03 to 10-09) pairing a
-#: refused curl request with a browser request from the same IP, then the
-#: browser was challenged too. Once the window lapses one read re-tests the
-#: pin; a fresh refusal renews the window, so recovery costs about one
-#: refused request a week.
+#: How long a standing HTTP refusal sends retrieval directly to the browser.
+#: After this window, one read re-tests the pin. A fresh refusal renews the
+#: window, avoiding repeated refused requests while browser fallback works.
 BROWSER_FIRST_WINDOW = timedelta(days=7)
 
 

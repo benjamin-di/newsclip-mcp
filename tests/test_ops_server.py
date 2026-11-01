@@ -290,6 +290,28 @@ def test_ops_server_registers_exactly_the_ops_tools() -> None:
     assert {tool["name"] for tool in tools} == set(OPS_TOOLS)
 
 
+@pytest.mark.parametrize("mode", ["legacy", "auto"])
+def test_ops_initialize_describes_only_supported_provider_operations(mode: str) -> None:
+    pytest.importorskip("mcp")
+    import anyio
+    from fastmcp import Client
+
+    from newsclip.ops_server import build_ops_server
+
+    server = build_ops_server(OpsAdapter(runner=RecordingRunner()))
+
+    async def exercise() -> None:
+        async with Client(server, mode=mode) as client:
+            instructions = client.instructions or ""
+            assert "provider overview" in instructions
+            assert "identity" not in instructions
+            tools = await client.list_tools()
+            assert {tool.name for tool in tools} == set(OPS_TOOLS)
+            assert all(tool.name in instructions for tool in tools)
+
+    anyio.run(exercise)
+
+
 def test_slow_provider_check_does_not_block_concurrent_health(monkeypatch) -> None:
     pytest.importorskip("anyio")
     pytest.importorskip("mcp")

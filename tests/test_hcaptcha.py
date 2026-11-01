@@ -901,8 +901,8 @@ def test_composite_grid_uses_planner_geometry_when_tiles_are_not_dom_nodes() -> 
 
 @pytest.mark.parametrize("corrected", [True, False])
 def test_composite_grid_requires_geometry_before_dispatch(corrected: bool) -> None:
-    # FT 2026-09-06: a composite 3x3 task returned correct indices without
-    # geometry. There are no independently addressable tile elements.
+    # Synthetic composite-grid indices are insufficient without geometry;
+    # there are no independently addressable tiles.
     probe = Probe()
     browser = EvidenceBrowser(probe)
     browser.page.frames[0].tiles = []
@@ -1690,7 +1690,7 @@ def _failover_fixture(monkeypatch, tmp_path: Path, *, claude_logged_in: bool):
 
     def run(command, **kwargs):  # noqa: ANN001, ANN003
         executables.append(command[0])
-        if command[0] == "/codex":  # the ChatGPT plan's usage cap (2026-10-21)
+        if command[0] == "/codex":  # Synthetic planner capacity failure.
             return SimpleNamespace(returncode=1, stdout="")
         return SimpleNamespace(
             returncode=0,

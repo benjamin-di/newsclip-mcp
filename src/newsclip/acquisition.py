@@ -99,10 +99,8 @@ class MintFailureCategory(StrEnum):
     SESSION_MISSING = "session_missing"
     ARTICLE_NOT_FULL = "article_not_full"
     TIMEOUT = "timeout"
-    #: A probe that completed but could not decide. Distinct from
-    #: TRANSPORT_FAILURE on purpose: the request worked, so retrying the
-    #: network changes nothing, and conflating the two hid an unentitled
-    #: Bloomberg session behind "transport failure" for eight days.
+    #: A completed probe that could not decide. Unlike TRANSPORT_FAILURE,
+    #: the request worked; retrying the network does not establish entitlement.
     INCONCLUSIVE = "inconclusive"
     TRANSPORT_FAILURE = "transport_failure"
     CLEANUP_FAILED = "cleanup_failed"

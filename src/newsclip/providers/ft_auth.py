@@ -489,11 +489,8 @@ class FTAcquisitionAdapter:
         account_key: str,
         challenge_mode: ChallengeMode,
     ) -> FlowCandidate:
-        # Dead rehydrate leaves ftsession* on the retained profile. Those cookies
-        # make _await_session believe a session exists before the password POST
-        # registers, raising session_missing in <1s (live 2026-07-22 after
-        # enter-email form.submit fix). Clear only session cookies so mint starts
-        # clean while other account affinity cookies can remain.
+        # Stale session cookies can make the poller see a session before a mint
+        # POST completes. Clear only session cookies, preserving other affinity.
         self._clear_ft_session_cookies(browser)
         self._resolve_challenge(browser, challenge_mode)
         observation = self._observe(browser)
@@ -516,9 +513,7 @@ class FTAcquisitionAdapter:
             # again immediately before typing into the username control.
             self._settle_consent(browser)
             with timing_step(TimingStep.USERNAME, provider=self.provider):
-                # Single-field fill() commits the email for HTML5 validation;
-                # fill_all_visible+type has left the enter-email step painted
-                # with a value while Next still no-ops (live 2026-07-22).
+                # Single-field fill commits the email for HTML5 validation before Next.
                 self._secrets.fill(
                     browser,
                     secret_ref=self._recipe.secret_ref,
@@ -549,9 +544,8 @@ class FTAcquisitionAdapter:
                 all_visible=True,
             )
 
-        # Pre-submit settle is best-effort only. Successful live mints often
-        # exhaust this window without native acceptance, then solve hCaptcha
-        # during post-submit await (challenge ~50s). Do not fail closed here.
+        # Pre-submit settling is bounded and best-effort. Native challenge
+        # acceptance can arrive during the post-submit callback window.
         self._settle_password_challenge(browser, challenge_mode)
 
         ledger = FTSubmitLedger()
@@ -654,10 +648,8 @@ class FTAcquisitionAdapter:
                     and not second_submit_used
                     and not ledger.token_post_claimed
                 ):
-                    # Residual profile cookies without a mint POST must not win
-                    # on the first poll (live: 0.5s session_missing after Sign
-                    # in while still on the password form). Keep waiting for a
-                    # POST or a real session transition; deadline handles hang.
+                    # Residual cookies must not win before a mint POST. Wait for a POST
+                    # or a session transition, bounded by the existing deadline.
                     continue
                 return self._candidate(
                     browser,
@@ -885,12 +877,10 @@ class FTAcquisitionAdapter:
         browser: AuthBrowserSession,
         challenge_mode: ChallengeMode,
     ) -> None:
-        """Let FT's password-form hCaptcha produce native acceptance evidence.
+        """Wait briefly for native password-form challenge acceptance.
 
-        Bounded pre-submit wait only. Live successes (e.g. 2026-07-22 08:01Z)
-        often exhaust this window without acceptance, then clear hCaptcha in
-        post-submit await — so this method must not fail closed.
-        """
+        Acceptance may arrive only after submission, so exhausting this bounded
+        pre-submit window does not itself fail the attempt."""
 
         with timing_step(TimingStep.PROVIDER_TRANSITION_WAIT, provider=self.provider):
             for poll in range(_PASSWORD_CHALLENGE_SETTLE_POLLS):
@@ -941,18 +931,11 @@ class FTAcquisitionAdapter:
             browser.wait(0.25)
 
     def _submit_username(self, browser: AuthBrowserSession) -> None:
-        """Advance the enter-email step to the password form.
+        """Advance the enter-email form to the password step.
 
-        Live accounts.ft.com ``#email-form`` registers a capture-phase submit
-        handler that tries WebAuthn/passkey first and only calls
-        ``emailForm.submit()`` in its ``catch``. When
-        ``navigator.credentials.get()`` hangs (common under virtual-display
-        with WebAuthn disabled), Next never reaches the password step — failure
-        screenshots still show a filled email + Next (2026-07-22).
-
-        ``HTMLFormElement.prototype.submit()`` bypasses submit listeners and
-        POSTs the enter-email form directly. Fall back to click / Enter / mouse.
-        """
+        A capture-phase handler can wait for WebAuthn before submitting the form.
+        If that promise stalls, direct HTMLFormElement submission bypasses the
+        listener. Click, Enter and mouse remain fallback submission methods."""
 
         try:
             result = browser.evaluate(

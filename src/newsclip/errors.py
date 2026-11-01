@@ -10,6 +10,7 @@ from .provider_keys import is_provider_key
 
 if TYPE_CHECKING:
     from .models import CaptureFailure, RawFetch
+    from .results import PublicErrorEnvelope
 
 _REASON_CODE = re.compile(r"^[a-z]+(?:_[a-z]+)+$")
 
@@ -21,6 +22,7 @@ class NewsclipError(RuntimeError):
     recovery_id: str | None = None
     recovery_eligible: bool = False
     recovery_omission: str | None = None
+    remote_error: PublicErrorEnvelope | None = None
 
 
 class UsageError(NewsclipError):
@@ -89,12 +91,9 @@ class TransportFailure(StrEnum):
     TIMEOUT = "timeout"
     DNS = "dns"
     TRANSPORT = "transport"
-    # A provider that *answered* is not a broken route. Collapsing its refusal
-    # into TRANSPORT sends an operator to inspect tunnels and DNS while the
-    # provider is simply throttling or erroring, which is what happened to the
-    # 2026-08-10 FT page: eleven capsules of 429/500/502/403 all reported as
-    # "transport". RATE_LIMITED is separated from PROVIDER_ERROR because the
-    # two carry opposite instructions — back off, versus the provider is down.
+    # An answering provider can be rate-limited or unavailable without a
+    # broken route. Separate throttling from other provider errors so callers
+    # can distinguish backoff from provider availability problems.
     RATE_LIMITED = "rate_limited"
     PROVIDER_ERROR = "provider_error"
 

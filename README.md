@@ -27,7 +27,7 @@ viewer works in a browser or phone; the browser service itself runs on Linux.
 ```sh
 git clone https://github.com/benjamin-di/newsclip-mcp.git
 cd newsclip-mcp
-uv sync --locked --extra mcp --extra signin
+uv sync --locked --extra local --extra mcp --extra signin
 uv run python scripts/setup.py --user alice --user bob
 # Configure OIDC in .env as described in docs/DEPLOYMENT.md before startup.
 docker compose up -d
@@ -78,6 +78,11 @@ newsclip --help
 newsclip --server http://127.0.0.1:8000/users/alice \
   --token-file /path/to/alice.token search "energy markets" --source ap --json
 ```
+
+The base package is a remote client and installs no publisher browser or sign-in
+runtime. For local Python/CLI use, install `newsclip[local]`; for the complete
+server use `newsclip[local,mcp,signin]` or the Compose setup above. Local use of a
+base-only installation reports the required extra.
 
 The same package provides `newsclip.client.NewsclipClient` for Python programs.
 Use the Docker Compose quick start above for the complete server and sign-in
@@ -146,7 +151,7 @@ publisher content, or grant rights to that content through its software license.
 ## Development
 
 ```sh
-uv sync --locked --extra mcp --extra signin
+uv sync --locked --extra local --extra mcp --extra signin
 uv run patchright install chromium
 make check
 make check-mcp

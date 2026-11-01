@@ -13,14 +13,14 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md LICENSE NOTICE ./
-RUN uv sync --locked --no-dev --extra mcp --extra signin --no-install-project \
+RUN uv sync --locked --extra local --no-dev --extra mcp --extra signin --no-install-project \
  && patchright install --with-deps chromium \
  && /app/.venv/bin/python -c "from pathlib import Path; import patchright; p = Path(patchright.__file__).parent / 'driver' / 'node'; p.unlink(); p.symlink_to('/usr/local/bin/browser-node')" \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 1000 newsclip \
  && useradd --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin newsclip
 COPY src ./src
-RUN uv sync --locked --no-dev --extra mcp --extra signin
+RUN uv sync --locked --extra local --no-dev --extra mcp --extra signin
 ARG VCS_REF=unknown
 ARG IMAGE_VERSION=development
 ARG VERSION=${IMAGE_VERSION}

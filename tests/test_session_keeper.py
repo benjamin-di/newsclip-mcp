@@ -1064,9 +1064,7 @@ def test_a_scheduled_cycle_does_not_renew_an_escalated_provider(
 
 
 def test_an_explicit_repair_may_ignore_the_escalation(tmp_path: Path) -> None:
-    """Only a renewal clears the escalation and the escalation stops the
-    keeper renewing, so without this a repaired cause could never be proven
-    (2026-07-28: Bloomberg's inconclusive run was a missing host library)."""
+    """A synthetic repaired cause can be verified by an explicit renewal."""
 
     keeper, sessions = _escalated(tmp_path)
 
@@ -1101,13 +1099,9 @@ def test_ignoring_the_escalation_still_respects_a_blocking_hold(
 def test_contradicting_canary_evidence_lets_one_renewal_through_the_latch(
     tmp_path: Path,
 ) -> None:
-    """A FULL guarded check disproves "unentitled" with live evidence.
+    """A synthetic FULL canary admits one renewal under an entitlement latch.
 
-    The 2026-08-06 Bloomberg escalation was a probe that could not read its
-    page while the session served full articles; the only exit was a manual
-    `ignore_escalation`. With contradicting evidence in hand the latch admits
-    one renewal, and its success resets both streaks unattended.
-    """
+    Success resets both streaks; failure retains the spent canary budget."""
 
     keeper, sessions = _escalated(
         tmp_path,
@@ -1203,12 +1197,7 @@ def _check(
 def test_a_sessionless_provider_is_watched_rather_than_renewed(
     tmp_path: Path,
 ) -> None:
-    """A pinned transport decays with nothing in the product noticing.
-
-    Reuters holds no session, so every session verb raises for it and it
-    entered no cycle at all — which is why its fingerprint could rot for five
-    days unreported. The cycle watches it instead.
-    """
+    """A synthetic sessionless provider still participates in drift monitoring."""
 
     sessions = FakeSessions(requires_session=False, check_result=_check(ok=True))
     keeper, _sessions, budget = _keeper(tmp_path, sessions=sessions)
@@ -1637,12 +1626,10 @@ def test_contended_guard_is_busy_not_a_recovery_worker_failure(tmp_path, recover
 def test_held_recovery_waits_for_the_event_that_could_clear_the_hold(
     tmp_path, action, canary_due_at, expected
 ):
-    """A 20-minute deferral respawned a watcher child ~72 times a day.
+    """Synthetic held recovery waits for an event that can clear the hold.
 
-    Only a scheduled keeper cycle (or an acknowledgement it then observes)
-    can clear these holds, so the watcher waits at least one cycle, and for
-    an incident-review hold until its next permitted canary.
-    """
+    The next attempt is deferred by at least one keeper cycle and respects the
+    next permitted incident-review canary, without spending an attempt."""
     from types import SimpleNamespace
 
     from newsclip.provider_guard import GuardAction

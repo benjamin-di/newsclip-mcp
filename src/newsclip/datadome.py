@@ -31,7 +31,7 @@ class DataDomeSliderMechanic:
     captcha. With no slider in view this mechanic only polls, so the Device
     Check gets its native passage. ``max_drags=0`` is the passive form: a
     provider approved for passage only never touches a captcha and fails
-    closed as soon as one appears (Reuters, 2026-10-12).
+    closed as soon as one appears.
     """
 
     vendor = ChallengeVendor.DATADOME
@@ -60,12 +60,10 @@ class DataDomeSliderMechanic:
         return self._max_drags == 0
 
     def has_actionable_surface(self, browser: ChallengeBrowser) -> bool:
-        """A slider this mechanic could drag, found without dragging it.
+        """Find an actionable slider without dragging it.
 
-        False on a hard block, which serves a contact-support page carrying no
-        slider at all — the shape that made `solve` spend its whole budget
-        polling and dispatch nothing (NYT, 2026-07-28).
-        """
+        A contact-support hard block has no slider and must not spend the action
+        budget polling for one."""
 
         return _find_slider_geometry(browser.page) is not None
 

@@ -587,12 +587,9 @@ class IdentityHandoffEvent(FrozenModel):
     # defense that never trusted the browser stays separable from a publisher
     # that never issued one.
     challenge_cookie_present: bool | None = None
-    # What the callback-clearance probe actually saw. `cleared=False` used to
-    # report `challenge_blocked` for three different situations: the defense
-    # re-blocked a browser it had just accepted, it never issued a clearance
-    # token at all, or the endpoint answered something the probe does not
-    # treat as clearance. They need different remedies, so the status and
-    # whether a clearance token existed are recorded rather than inferred.
+    # Record callback status and clearance-cookie presence independently.
+    # A refused callback, absent token and non-clearance response need distinct
+    # remedies; a single cleared boolean cannot distinguish them.
     callback_probe_status: int | None = Field(default=None, ge=100, le=599)
     callback_clearance_cookie_present: bool | None = None
     paid_probe_outcome: PaidProbeOutcome | None = None

@@ -382,11 +382,7 @@ _CHECK_TITLE = "Why oil prices haven't gone crazy despite 5 months of US-Iran wa
 
 
 class _SitemapThenChallengeHttp:
-    """The sitemap keeps answering while every article fetch is challenged.
-
-    Exactly the measured 07-30/08-01 shape: search survives a fingerprint
-    rot event that refuses the retrieval leg.
-    """
+    """Synthetic sitemap success can coexist with challenged article retrieval."""
 
     def get(
         self,
@@ -506,15 +502,11 @@ _BODY_SENTENCE = "Verified Reuters reporting provides substantive fixture eviden
 
 
 def _rail_html(*, articles: int = 1) -> bytes:
-    """Mirror the live DOM: a related-story rail outside the article element.
+    """Build a synthetic related-story rail outside the article element.
 
-    Reuters renders ``div[data-testid=MediaStoryCard]`` inside
-    ``ul[data-testid=StoryCollection]``, a sibling of the page's single
-    ``<article>``, and rotates which story it teases — which is why byte-stable
-    article content produced 1005 then 996 words live.
-
-    ``articles=0`` keeps the body in a non-article container, the shape of a page
-    the scope is meant to refuse; ``articles=2`` is the drift case.
+    Changing the sibling MediaStoryCard must not affect the extracted body.
+    ``articles=0`` exercises a non-article container; ``articles=2`` exercises
+    ambiguous article scope.
     """
 
     paragraphs = "".join(
@@ -1065,10 +1057,9 @@ def test_search_waits_for_dispatched_sitemap_workers_after_failure(
 def test_function_word_matches_never_qualify_a_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Reproduce the live census: only informative tokens may score.
+    """A synthetic function-word match cannot qualify an unrelated headline.
 
-    "of" alone matched 23 of 400 window entries for "Strait of Hormuz", and
-    recency then promoted the newest of them — an outfielder abbreviation.
+    Informative query tokens determine eligibility before recency ranks it.
     """
 
     provider = ReutersProvider()

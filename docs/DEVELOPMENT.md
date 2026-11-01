@@ -1,6 +1,6 @@
 # Development and validation
 
-Use Python 3.12+ and uv. Install with `uv sync --locked --extra mcp --extra
+Use Python 3.12+ and uv. Install with `uv sync --locked --extra local --extra mcp --extra
 signin`, then `uv run patchright install chromium`. Linux is required for the
 browser sign-in service and POSIX profile locks.
 

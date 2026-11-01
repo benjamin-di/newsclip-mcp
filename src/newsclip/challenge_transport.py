@@ -21,16 +21,12 @@ ChallengeClassifier = Callable[[RawFetch], bool]
 class ChallengeAwareHttpClient:
     """Return the primary GET or one browser fallback without recursion.
 
-    ``on_challenge_observed`` receives the challenged primary response only
-    when it is the evidence of an unrecovered request: there is no fallback,
-    the fallback raised, or the fallback was challenged too. A challenge the
-    browser answers is recorded as the timing operation's browser fallback.
+    ``on_challenge_observed`` receives an unrecovered primary challenge when no
+    fallback exists, the fallback raises, or the fallback is challenged too.
+    Successful browser fallback is recorded by the timing operation.
 
-    ``browser_first`` reports a standing rot signal for the primary
-    transport. While it holds, the read goes straight to the browser: the
-    primary profile was already refused, and asking again only adds a bot
-    verdict against this host (R8, 2026-10-12).
-    """
+    ``browser_first`` reports a standing primary-transport refusal. While it
+    holds, reads go directly to the browser to avoid repeating that refusal."""
 
     def __init__(
         self,
@@ -70,11 +66,8 @@ class ChallengeAwareHttpClient:
             return fetch
         if self._browser_fallback is None:
             self._retain_challenge(fetch)
-            # A stateless edge challenge with no approved fallback is a
-            # defense event, not an operator matter: nothing a person does to
-            # the account changes it, and telling callers "operator action
-            # required" sent them hunting runbooks (2026-07-28 Reuters
-            # audit). Fail closed, honestly retryable.
+            # A stateless edge challenge without an approved fallback is a defense
+            # event. Account changes cannot resolve it; fail closed and retryable.
             raise ProviderDefenseError(
                 f"{self._provider} returned an unsupported interactive challenge",
                 provider=self._provider,

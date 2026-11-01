@@ -322,12 +322,9 @@ def test_search_date_filter_and_stop_words_fail_closed() -> None:
 
 
 def test_search_discloses_the_window_it_could_actually_reach() -> None:
-    """AP's sitemap is a moving window too, so it must state its trailing edge.
+    """Report the synthetic sitemap's trailing edge using owned articles only.
 
-    A live sample spanned 47 hours across 445 entries, so a story from three
-    days ago is simply unreachable — a fact a bare result count cannot convey.
-    Only owned entries count: the old hub URL below is not an article, so
-    claiming its date as coverage would overstate the reach search really had.
+    An older hub URL must not overstate the fetched article coverage.
     """
 
     http = SitemapHttp()

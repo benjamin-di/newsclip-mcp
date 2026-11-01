@@ -2740,14 +2740,10 @@ def test_virtual_runtime_adds_proven_xvfb_rendering_arguments(
 
 
 def test_every_handoff_fact_the_event_carries_is_accepted_by_the_recorder() -> None:
-    """The recorder must forward every fact the event models.
+    """Every modeled handoff fact must be accepted by the recorder.
 
-    `_record_identity_handoff` swallows exceptions so diagnostics can never
-    change authentication behaviour, which means a keyword the recorder does
-    not accept raises TypeError into that guard and disappears. Two releases
-    shipped fields the event validated and the recorder silently dropped
-    (0.3.17, 0.3.18); the run they were added to diagnose produced nothing.
-    """
+    An unsupported keyword would be swallowed by the diagnostic exception guard.
+    Compare the event and recorder contracts without invoking authentication."""
 
     import inspect
 

@@ -1,10 +1,6 @@
-"""Session-evidence holds clear on the verification event (P1b).
+"""Synthetic session-evidence holds clear on positive verification.
 
-A hold whose named remedy is session renewal or promotion must clear the
-moment a session positively verifies live — keeping it manual blocked the
-keeper hourly for days (the 2026-07-25 FT trap). Defense, operator,
-local-state, and incident-review holds never clear this way.
-"""
+Defense, operator, local-state and incident-review holds remain distinct."""
 
 from __future__ import annotations
 
@@ -197,11 +193,7 @@ def test_service_fires_evidence_callback_only_on_verified_import() -> None:
 
 
 def test_keeper_renews_under_a_session_evidence_hold(tmp_path: Path) -> None:
-    """The FT trap: a hold whose remedy IS renewal must not block the renewer.
-
-    Blocking it closed the loop — nothing verified, so the hold that clears on
-    verification never cleared, and FT reported `held` hourly for days.
-    """
+    """A synthetic hold whose remedy is renewal must not block the renewer."""
 
     from newsclip.models import SessionHealth, SessionStatus
     from newsclip.provider_guard import GuardAction

@@ -239,7 +239,7 @@ def test_stale_beyond_policy_age() -> None:
 
 
 def test_degraded_by_failure_streak_while_still_verified() -> None:
-    """The Bloomberg case: verified 8 days ago, renewal failing hourly."""
+    """Synthetic repeated renewal failures degrade a still-verified session."""
     enriched = enrich_session_health(
         _health(verified_ago_hours=1),
         _outcome(DEGRADED_FAILURE_STREAK),
@@ -340,14 +340,7 @@ def test_keeper_records_every_verdict(tmp_path: Path) -> None:
 
 
 def test_an_old_session_without_a_keeper_is_stale_not_degraded() -> None:
-    """A workstation runs no keeper, so age alone proves nothing is failing.
-
-    Observed 2026-07-28: a laptop Bloomberg session last verified six days
-    earlier returned a full 866-word article while `newsclip health` called
-    it degraded. The deep-age rule means "the keeper has not managed to renew
-    this for several windows" — which presupposes a keeper. With no outcome
-    history there is none, so the session is merely overdue.
-    """
+    """Synthetic old sessions without renewal history are overdue, not failing."""
 
     health = _health(verified_ago_hours=6 * 24)
     enriched = enrich_session_health(health, None, now=NOW)

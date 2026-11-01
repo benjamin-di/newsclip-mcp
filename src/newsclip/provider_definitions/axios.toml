@@ -40,7 +40,7 @@ canonical_signal = "canonical_article_url"
 article_xpath = ["//*[@data-cy='story-body']"]
 required_signals = ["newsarticle_jsonld", "jsonld_headline", "article_body_structure", "markdown_body", "extracted_headline"]
 
-# Retained HTTP403 on 2026-09-07. A mention of Cloudflare is not a challenge.
+# A mention of Cloudflare alone does not establish a challenge.
 [[assessment.negative_rules]]
 kind = "challenge"
 xpath_any = ["//html[head/title[normalize-space()='Just a moment...'] and .//script[contains(@src, '/cdn-cgi/challenge-platform/') or contains(., '/cdn-cgi/challenge-platform/')]]"]

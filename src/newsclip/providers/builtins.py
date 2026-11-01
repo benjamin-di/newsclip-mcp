@@ -44,7 +44,7 @@ BUILTIN_PROVIDER_REGISTRATIONS = {
     "reuters": BuiltinProviderRegistration(
         build_provider=build_reuters_provider,
         # Passage only: DataDome's Device Check clears itself for a browser it
-        # accepts; the slider captcha is never attempted (2026-10-12).
+        # accepts; the slider captcha is never attempted.
         approved_challenge_vendors=frozenset({ChallengeVendor.DATADOME}),
         passive_challenge_vendors=frozenset({ChallengeVendor.DATADOME}),
     ),

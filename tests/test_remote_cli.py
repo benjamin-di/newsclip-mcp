@@ -14,12 +14,13 @@ pytest.importorskip("fastmcp")
 from starlette.testclient import TestClient  # noqa: E402
 from test_standalone import make_app  # noqa: E402
 
-from newsclip import cli  # noqa: E402
+from newsclip import cli, remote_cli  # noqa: E402
 from newsclip.client import NewsclipClient  # noqa: E402
 
 
+@pytest.mark.parametrize("interface", [cli, remote_cli])
 def test_remote_cli_uses_shared_search_save_archive_and_connect(
-    accounts, tmp_path, monkeypatch
+    accounts, tmp_path, monkeypatch, interface
 ):
     app, tokens, _ = make_app(accounts, tmp_path)
     token_file = tmp_path / "alice.token"
@@ -50,7 +51,7 @@ def test_remote_cli_uses_shared_search_save_archive_and_connect(
             str(token_file),
         ]
         search = runner.invoke(
-            cli.app,
+            interface.app,
             [
                 *common,
                 "search",
@@ -66,7 +67,7 @@ def test_remote_cli_uses_shared_search_save_archive_and_connect(
         assert len(json.loads(search.stdout)["results"]) == 2
         destination = tmp_path / "client/article.md"
         saved = runner.invoke(
-            cli.app,
+            interface.app,
             [
                 *common,
                 "save",
@@ -80,25 +81,27 @@ def test_remote_cli_uses_shared_search_save_archive_and_connect(
         article = json.loads(saved.stdout)
         assert destination.read_text().strip() == article["body_markdown"]
         archived = runner.invoke(
-            cli.app, [*common, "archive-get", article["id"], "--json"]
+            interface.app, [*common, "archive-get", article["id"], "--json"]
         )
         assert archived.exit_code == 0, archived.output
         assert json.loads(archived.stdout)["id"] == article["id"]
         connect = runner.invoke(
-            cli.app, [*common, "auth", "connect", "fixture", "--json"]
+            interface.app, [*common, "auth", "connect", "fixture", "--json"]
         )
         assert connect.exit_code == 0, connect.output
         assert "/connections/#fixture" in json.loads(connect.stdout)["url"]
         assert json.loads(connect.stdout)["expires_at"] is None
         assert tokens["alice"] not in connect.stdout
-        human_connect = runner.invoke(cli.app, [*common, "auth", "connect", "fixture"])
+        human_connect = runner.invoke(
+            interface.app, [*common, "auth", "connect", "fixture"]
+        )
         assert human_connect.exit_code == 0, human_connect.output
         assert "Only the authenticated owner" in human_connect.stdout
-        doctor = runner.invoke(cli.app, [*common, "doctor", "--json"])
+        doctor = runner.invoke(interface.app, [*common, "doctor", "--json"])
         assert doctor.exit_code == 0, doctor.output
         assert json.loads(doctor.stdout)["providers"] == ["fixture"]
         denied = runner.invoke(
-            cli.app,
+            interface.app,
             [
                 "--server",
                 "http://127.0.0.1/users/bob",

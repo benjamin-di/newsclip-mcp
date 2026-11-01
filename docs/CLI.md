@@ -5,6 +5,11 @@ Global options precede the command. `--version` reports the installed version.
 
 ## Remote use
 
+The base package installs the remote client. Install `newsclip[local]` on a
+server or workstation that also performs publisher acquisition or local
+administration. Remote JSON successes use stdout; expected JSON failures use
+stderr with a nonzero exit code. Subcommand help requires no server or token.
+
 ```sh
 newsclip --server http://127.0.0.1:8000/users/alice \
   --token-file local/tokens/alice.token search "energy" --source ap --json

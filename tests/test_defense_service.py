@@ -623,8 +623,7 @@ def _fixture_report(service: NewsclipService):
 def test_a_search_refused_during_a_cooldown_is_not_retried_until_it_ends(
     tmp_path: Path,
 ) -> None:
-    """An IP-level restriction refuses search too (Economist, 2026-10-19): each
-    further search is more of the traffic it cites, so one per cooldown."""
+    """A synthetic IP restriction permits only one search per cooldown."""
 
     clock = _Clock()
     service, http, defense = _search_service(tmp_path, clock)

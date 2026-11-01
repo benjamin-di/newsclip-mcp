@@ -437,20 +437,10 @@ def test_credential_mint_submits_email_then_password_in_order() -> None:
 
 
 def test_a_remembered_account_resumes_at_the_password_step() -> None:
-    """A retained profile puts NYT's login at the password step.
+    """A synthetic remembered account resumes at the password step.
 
-    The page still shows the remembered address in a visible but READ-ONLY
-    field. `username_visible` now selects on editability, so that decoration
-    reads false and the flow reaches the password step with no
-    mutual-exclusion guard — the observation carries the distinction instead
-    of the branch.
-
-    Filling the read-only address is what blocked on actionability until
-    Playwright times out on a read-only field. That the
-    observation truly reads false on this page shape is pinned separately by
-    the `nyt-password_step` auth-surface fixture; this pins what the flow does
-    once it does.
-    """
+    The visible read-only address must not trigger username filling. Editable
+    field observations choose the step without a mutual-exclusion shortcut."""
 
     secrets = FakeSecrets()
     browser = FakeBrowser(

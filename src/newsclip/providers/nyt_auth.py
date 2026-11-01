@@ -180,21 +180,10 @@ class NYTAcquisitionAdapter:
                     failure_stage=MintFailureStage.CREDENTIAL,
                 )
             self._terminal(observation)
-            # NYT's login is two steps, and each renders the other step's field
-            # as a visible but READ-ONLY decoy. Both observations therefore
-            # select on editability rather than presence (see nyt.toml), which
-            # is the same property `fill` requires — so each reads true only on
-            # the step that is actually live, and no mutual-exclusion guard is
-            # needed to tell them apart.
-            #
-            # An earlier guard did that job by making password_visible dominant.
-            # It cured the read-only *username* at the password step and created
-            # the mirror defect at the email step, where the read-only password
-            # decoy suppressed the username step entirely and the fill blocked
-            # for 30s (2026-07-28 cold gate, reported as
-            # credential_infrastructure). Testing the property directly retires
-            # both. If a step ever presents an editable username again, this
-            # merely runs the username step a second time — a retry, not a skip.
+            # Each login step can render the other step's field as a read-only decoy.
+            # Observe editability, matching the fill contract, rather than making one
+            # field's visibility suppress the other. An editable username can safely
+            # repeat the username step; a read-only decoy cannot trigger it.
             if observation.username_visible:
                 with timing_step(TimingStep.USERNAME, provider=self.provider):
                     self._secrets.fill(

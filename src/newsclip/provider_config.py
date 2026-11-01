@@ -445,9 +445,8 @@ class ExtractionSpec(FrozenModel):
     *is* an article, the other selects which bytes may become its body. They are
     free to diverge as provider markup does.
 
-    The scope is an allowlist rather than a prune denylist. Both produce
-    identical output on the audited pages, but a denylist fails open when the
-    provider ships a new module, while an allowlist fails closed.
+    The scope is an allowlist rather than a prune denylist. A denylist can
+    admit a new unrelated module; an allowlist excludes it by default.
     """
 
     scope_xpath: tuple[str, ...] = Field(min_length=1)

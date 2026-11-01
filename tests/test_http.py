@@ -356,11 +356,9 @@ def test_anonymous_fan_out_records_shared_and_overflow_routes(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    """Parallel public discovery must not pin the shared route until it drains.
+    """Synthetic parallel discovery must not block the shared route until it drains.
 
-    Reuters sitemap fan-out used to share one locked curl session, so leftover
-    discovery GETs held the lock and the following article save waited on them.
-    """
+    Keep concurrent sitemap requests independent of a subsequent article fetch."""
 
     entered = threading.Barrier(3)
     release = threading.Event()

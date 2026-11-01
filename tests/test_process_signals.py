@@ -95,7 +95,7 @@ def test_console_script_uses_the_unwinding_entry_point() -> None:
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     scripts = tomllib.loads(pyproject.read_text())["project"]["scripts"]
 
-    assert scripts["newsclip"] == "newsclip.cli:run"
+    assert scripts["newsclip"] == "newsclip.entrypoint:run"
 
 
 _PARENT_WITH_GRANDCHILD = textwrap.dedent(

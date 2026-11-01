@@ -24,7 +24,7 @@ lowercase_groups = ["id"]
 
 # GuardianProvider serves search and article bodies entirely from the Open
 # Platform API - the publisher's licensed channel; theguardian.com is never
-# scraped (robots policy verified 2026-07-28). The key reference is
+# scraped, respecting the publisher's robots policy. The key reference is
 # resolved lazily and attached as a host-scoped request header so the
 # credential can never reach a URL or the archive.
 [search]
