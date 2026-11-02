@@ -319,9 +319,9 @@ def test_disconnect_requires_fresh_authentication(accounts, tmp_path):
             headers={"origin": "http://127.0.0.1"},
             follow_redirects=False,
         )
-        assert response.status_code == 303 and response.headers["location"].endswith(
-            "login?reauth=1"
-        )
+        # A page whose link starts step-up, never a redirect a browser would cancel.
+        assert response.status_code == 403 and "location" not in response.headers
+        assert 'href="/connections/login?reauth=1"' in response.text
         assert controls.status("fixture")["phase"] == 0
         # A sign-in the provider authenticated just now already is one.
         browser_login(app, client)

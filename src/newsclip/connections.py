@@ -27,6 +27,10 @@ from .sessions import ServingSessions, SessionStore
 from .subscription_access import SubscriptionAccess
 from .tenancy import application_root, load_users, user_scope
 
+FRESH_SECONDS = (
+    300  # Share and disconnect need an identity-provider confirmation at most this old
+)
+
 _PUBLISHER_NAMES = {
     "ft": "Financial Times",
     "economist": "The Economist",
@@ -538,10 +542,8 @@ class Connections:
 
     async def sharing_action(self, request):
         user = self.user(request)
-        if user is None:
-            return Response(status_code=401)
-        if not self.auth.origin_ok(request):
-            return Response(status_code=403)
+        if user is None or not self.auth.origin_ok(request):
+            return self.auth.refused(request)
         if self.access is None:
             return Response(status_code=503)
         action = request.url.path.rsplit("/", 1)[1]
@@ -574,14 +576,12 @@ class Connections:
                 raise ValueError("publisher needs no connection")
         except (ValueError, UnicodeError, NewsclipError):
             return Response(status_code=400)
-        if action == "share":
-            identity = self.auth.identity(request)
-            fresh = identity.get("reauthenticated_at") if identity else None
-            if (
-                not isinstance(fresh, int | float)
-                or not 0 <= self.clock() - fresh <= 300
-            ):
-                return RedirectResponse(self.home + "login?reauth=1", status_code=303)
+        if action == "share" and (
+            confirm := self.auth.require_fresh(
+                request, max_age=FRESH_SECONDS, action="share this connection"
+            )
+        ):
+            return confirm
         access = self.access
 
         def apply():
@@ -640,10 +640,8 @@ class Connections:
 
     async def action(self, request):
         user = self.user(request)
-        if not user:
-            return Response(status_code=401)
-        if not self.auth.origin_ok(request):
-            return Response(status_code=403)
+        if not user or not self.auth.origin_ok(request):
+            return self.auth.refused(request)
         payload = bytearray()
         async for chunk in request.stream():
             payload.extend(chunk)
@@ -666,14 +664,12 @@ class Connections:
         except (ValueError, UnicodeError):
             return Response(status_code=400)
         action = request.url.path.rsplit("/", 1)[1]
-        identity = self.auth.identity(request)
-        if action == "disconnect":
-            fresh = identity.get("reauthenticated_at") if identity else None
-            if (
-                not isinstance(fresh, int | float)
-                or not 0 <= self.clock() - fresh <= 300
-            ):
-                return RedirectResponse(self.home + "login?reauth=1", status_code=303)
+        if action == "disconnect" and (
+            confirm := self.auth.require_fresh(
+                request, max_age=FRESH_SECONDS, action="disconnect this publisher"
+            )
+        ):
+            return confirm
         adapter = self.adapters[user]
         expected_revision = values.get("revision", [""])[0]
         if action in ("cancel", "disconnect") and not expected_revision:

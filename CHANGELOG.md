@@ -3,6 +3,21 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.0.2] - 2026-11-02
+
+### Fixed
+
+- Answer a stale Share or Disconnect on the Connections page with a "Confirm it's you" page that starts the step-up by navigation, instead of refusing it (signin-window-private#4).
+- Explain refused Connections requests: an ended sign-in gets a 401 page with a sign-in link, and a cross-site or unauthorized request gets a 403 page saying nothing changed (signin-window-private#4).
+- Keep the person signed in when a step-up is abandoned or cancelled, by updating signin-window to 0.6.0; a sign-in in progress during the upgrade must be started again (signin-window-private#4).
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.0.1.
+
+[2.0.2]: https://github.com/benjamin-di/newsclip-mcp/releases/tag/v2.0.2
+
 ## [2.0.1] - 2026-11-01
 
 _Enforce patched dependencies and describe the current provider operations._
