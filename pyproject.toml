@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "newsclip"
-version = "2.0.2"
+version = "2.0.3"
 description = "News search, verified subscription reading and private archiving"
 license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
@@ -25,7 +25,7 @@ local = [
   "lxml>=5,<7",
   "patchright>=1.52,<2",
   "trafilatura>=2,<3",
-  "signin-window[automation,oidc]>=0.6,<0.7",
+  "signin-window[automation,oidc]>=0.7.1,<0.8",
   "account-connections==0.1.1",
   # Security minima are part of the local wheel contract, not only the uv lock.
   "authlib>=1.9.1",

@@ -3,6 +3,19 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.0.3] - 2026-11-03
+
+### Fixed
+
+- Use signin-window 0.7.1 for consistent mobile action widths, readable long labels and accessible checkbox touch targets.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.0.2; preserve current credentials, connection controls and owner bindings.
+
+[2.0.3]: https://github.com/benjamin-di/newsclip-mcp/releases/tag/v2.0.3
+
 ## [2.0.2] - 2026-11-02
 
 ### Fixed
@@ -15,6 +28,9 @@ Earlier releases are recorded in their release tags.
 
 - Action required: none.
 - Rollback: compatible with 2.0.1.
+
+[2.0.2]: https://github.com/benjamin-di/newsclip-mcp/releases/tag/v2.0.2
+
 
 [2.0.2]: https://github.com/benjamin-di/newsclip-mcp/releases/tag/v2.0.2
 
