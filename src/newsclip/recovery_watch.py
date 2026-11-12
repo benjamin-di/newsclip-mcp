@@ -15,6 +15,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime
 
+from .build_identity import log_fields
 from .errors import PersistenceError
 from .models import RecoveryStatus
 from .process_signals import under_timeout
@@ -150,6 +151,12 @@ class RecoveryWatch:
 
 
 def main() -> None:
+    from .log import run_command
+
+    run_command(_main)
+
+
+def _main() -> None:
     from .process_signals import exit_on_sigterm
     from .tenancy import user_scope
 
@@ -175,7 +182,7 @@ def _watch_account() -> None:
     try:
         while True:
             for outcome in watcher.tick():
-                print(json.dumps(outcome), flush=True)
+                print(json.dumps({**outcome, **log_fields()}), flush=True)
             time.sleep(30)
     finally:
         watcher.close()

@@ -631,7 +631,7 @@ def build_mcp() -> NewsclipMcp:
 def run_stdio() -> None:  # pragma: no cover - process entry point
     """Serve the local stdio MCP surface. Opens no network listener."""
 
-    build_mcp().build_server().run(transport="stdio")
+    build_mcp().build_server().run(transport="stdio", show_banner=False)
 
 
 class BearerAuthMiddleware:
@@ -702,8 +702,13 @@ def new_fastmcp(name: str, *, instructions: str):
 
     from fastmcp import FastMCP
 
-    return FastMCP(
+    from .build_identity import BUILD
+    from .log import runtime_logs, stamp_handlers
+
+    server = FastMCP(
         name,
+        version=BUILD.version,
+        lifespan=runtime_logs,
         instructions=instructions,
         # Product errors already return the stable {ok, category} envelope;
         # anything else is unexpected and must not leak its raw text.
@@ -712,6 +717,8 @@ def new_fastmcp(name: str, *, instructions: str):
         # clients on the 2026-07-28 protocol.
         cache_ttl=600,
     )
+    stamp_handlers()
+    return server
 
 
 def _http_app(
@@ -791,6 +798,8 @@ def run_http(
 
     import uvicorn
 
+    from .log import uvicorn_log_config
+
     resolved_host = host or os.environ.get("NEWSCLIP_MCP_HOST", DEFAULT_HTTP_HOST)
     if port is None:
         try:
@@ -811,6 +820,7 @@ def run_http(
         port=resolved_port,
         log_level=log_level,
         access_log=False,
+        log_config=uvicorn_log_config(),
         proxy_headers=False,
         server_header=False,
     )

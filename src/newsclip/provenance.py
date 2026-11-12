@@ -55,6 +55,7 @@ class SourceIdentity(FrozenModel):
 
 
 class BuildIdentitySource(StrEnum):
+    PACKAGED = "packaged"
     ENVIRONMENT = "environment"
     LOCAL_CHECKOUT = "local_checkout"
     UNAVAILABLE = "unavailable"
@@ -62,6 +63,7 @@ class BuildIdentitySource(StrEnum):
 
 
 class BuildIdentityUnavailableReason(StrEnum):
+    UNSTAMPED_DEVELOPMENT = "unstamped_development"
     INVALID_ENVIRONMENT = "invalid_environment"
     SOURCE_TREE_UNAVAILABLE = "source_tree_unavailable"
     LEGACY_RECORD = "legacy_record"
@@ -76,7 +78,10 @@ class BuildIdentity(FrozenModel):
 
     @model_validator(mode="after")
     def validate_source(self) -> BuildIdentity:
-        if self.source is BuildIdentitySource.ENVIRONMENT:
+        if self.source in {
+            BuildIdentitySource.ENVIRONMENT,
+            BuildIdentitySource.PACKAGED,
+        }:
             if (
                 self.revision is None
                 or self.dirty is None
@@ -132,48 +137,20 @@ def resolve_build_identity(
     *,
     environment: Mapping[str, str] | None = None,
 ) -> BuildIdentity:
-    """Resolve one compact identity without mixing partial authorities."""
+    """Read the producing artifact; legacy parameters cannot relabel runtime code."""
 
-    selected_environment = os.environ if environment is None else environment
-    revision = selected_environment.get("NEWSCLIP_BUILD_REVISION")
-    dirty_value = selected_environment.get("NEWSCLIP_BUILD_DIRTY")
-    fingerprint = selected_environment.get("NEWSCLIP_BUILD_SOURCE_FINGERPRINT")
-    if any(value is not None for value in (revision, dirty_value, fingerprint)):
-        dirty = _parse_dirty(dirty_value)
-        if (
-            revision is not None
-            and re.fullmatch(_REVISION_PATTERN, revision)
-            and dirty is not None
-            and fingerprint is not None
-            and re.fullmatch(_SHA256_PATTERN, fingerprint)
-        ):
-            return BuildIdentity(
-                revision=revision,
-                dirty=dirty,
-                source_fingerprint=fingerprint,
-                source=BuildIdentitySource.ENVIRONMENT,
-            )
+    from .build_identity import BUILD
+
+    if BUILD.source_revision == "unknown":
         return BuildIdentity(
             source=BuildIdentitySource.UNAVAILABLE,
-            unavailable_reason=BuildIdentityUnavailableReason.INVALID_ENVIRONMENT,
-        )
-    if repository is None:
-        return BuildIdentity(
-            source=BuildIdentitySource.UNAVAILABLE,
-            unavailable_reason=BuildIdentityUnavailableReason.SOURCE_TREE_UNAVAILABLE,
-        )
-    try:
-        source = build_source_identity(repository)
-    except (SourceIdentityError, OSError, ValueError):
-        return BuildIdentity(
-            source=BuildIdentitySource.UNAVAILABLE,
-            unavailable_reason=BuildIdentityUnavailableReason.SOURCE_TREE_UNAVAILABLE,
+            unavailable_reason=BuildIdentityUnavailableReason.UNSTAMPED_DEVELOPMENT,
         )
     return BuildIdentity(
-        revision=source.git_head,
-        dirty=source.behavior_tree_dirty,
-        source_fingerprint=source.source_fingerprint,
-        source=BuildIdentitySource.LOCAL_CHECKOUT,
+        revision=BUILD.source_revision,
+        dirty=BUILD.dirty,
+        source_fingerprint=BUILD.source_fingerprint,
+        source=BuildIdentitySource.PACKAGED,
     )
 
 
@@ -282,11 +259,3 @@ def _git_pathspecs() -> tuple[str, ...]:
         "src/newsclip/provider_definitions/*.toml",
         *_manifest_files(),
     )
-
-
-def _parse_dirty(value: str | None) -> bool | None:
-    if value == "1":
-        return True
-    if value == "0":
-        return False
-    return None

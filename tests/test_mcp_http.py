@@ -126,6 +126,9 @@ def test_authenticated_mcp_initialize_and_tool_listing() -> None:
 
     assert initialized.status_code == 200
     assert initialized.json()["result"]["serverInfo"]["name"] == "newsclip"
+    from newsclip.build_identity import BUILD
+
+    assert initialized.json()["result"]["serverInfo"]["version"] == BUILD.version
     assert initialized.json()["result"]["instructions"] == SERVER_INSTRUCTIONS
     assert listed.status_code == 200
     tools = listed.json()["result"]["tools"]

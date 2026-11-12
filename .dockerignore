@@ -6,6 +6,11 @@
 !NOTICE
 !src/
 !src/**
+!scripts/
+scripts/**
+!scripts/embed-build-identity.py
+!scripts/check-build-identity.py
+src/newsclip/build_identity.json
 src/newsclip/repair_policy.py
 **/__pycache__/
 **/*.pyc

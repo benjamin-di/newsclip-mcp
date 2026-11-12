@@ -663,11 +663,14 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8000) -> None:
 
     ensure_virtual_display()
 
+    from .log import uvicorn_log_config
+
     uvicorn.run(
         build_standalone_app(),
         host=host,
         port=port,
         access_log=False,
+        log_config=uvicorn_log_config(),
         proxy_headers=False,
         server_header=False,
     )

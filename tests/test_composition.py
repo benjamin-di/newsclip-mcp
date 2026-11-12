@@ -415,8 +415,8 @@ def test_default_service_wires_cookie_store_and_bloomberg_browser_plane(
 
     assert isinstance(service._sessions, SessionStore)
     assert service._timing is not None
-    assert service._timing.build_identity_source is BuildIdentitySource.LOCAL_CHECKOUT
-    assert service._timing.build_source_fingerprint is not None
+    assert service._timing.build_identity_source is BuildIdentitySource.UNAVAILABLE
+    assert service._timing.build_source_fingerprint is None
     assert service._browser_retriever is not None
     assert not (service._sessions.root / "traces").exists()
     assert set(service._sessions._adapters) == {

@@ -3,6 +3,33 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.1.1] - 2026-11-12
+
+_Publishes the 2.1.0 changes, which the public mirror did not receive; the package is unchanged from 2.1.0._
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.1.0.
+
+## [2.1.0] - 2026-11-12
+
+### Added
+
+- Embed the application version, full source revision and a bounded source fingerprint in release images and distributions; runtime reads do not trust environment overrides or invoke Git (#48)
+- Attribute retained application, MCP, timing and browser diagnostics to their producing build and process, preserving legacy records and log suppression (#48)
+- Forward the host build identity to the signin-window Connections, browser authentication, relay and direct viewer pages, using signin-window 0.8 (#48)
+
+### Fixed
+
+- Check installed identity in publisher acceptance; source Compose builds require the selected product version and full revision, and live qualification refuses when selected-source dirtiness conflicts with the artifact stamp (#48)
+- Preserve enclosing Rich console capture and recording while attributing diagnostics, and retain native sink-error handling and terminal rendering (#48)
+
+### Upgrade
+
+- Action required: none for images. Source Compose builds must pass the product version and full source revision.
+- Rollback: compatible with 2.0.3; no state format changes.
+
 ## [2.0.3] - 2026-11-03
 
 ### Fixed
@@ -83,10 +110,7 @@ _Security: upgrade from 1.0.0 for patched authentication, MCP and DNS dependenci
 
 ### Security
 
-- Address token-signature, nonce, audience and scope validation bypasses, unsafe authorization-request URL fetches and registration-token binding guidance by updating Authlib to 1.9.1 (GHSA-8m4g-j4wp-wgcg, GHSA-7vr2-2fgp-9w7p, GHSA-6v38-4h7w-rj9h, GHSA-c5mf-xmp2-59rc, GHSA-fch4-3c6x-j4gc, GHSA-q686-2qmg-hqc7, GHSA-x4rv-c3wx-4cr8, GHSA-c73q-w75p-j82v; a9635d9).
-- Prevent unauthorized access to transformed components and potential OAuth client-secret disclosure in affected MCP client wrappers by updating FastMCP to 4.1.2 (GHSA-7xgj-8392-5q4r, GHSA-vqqp-x5qm-5qp4; a9635d9).
-- Reject oversized signed tokens before allocating their segments to prevent memory exhaustion by updating joserfc to 1.7.6 (GHSA-9pg5-8c7x-5hfx; a9635d9).
-- Avoid excessive CPU use while parsing untrusted DNS names by updating dnspython to 2.9.0 (GHSA-45c3-73f7-pv4m; a9635d9).
+- Address token-signature, nonce, audience and scope validation bypasses, unsafe authorization-request URL fetches and registration-token binding guidance by updating Authlib to 1.9.1 (GHSA-8m4g-j4wp-wgcg, GHSA-7vr2-2fgp-9w7p, GHSA-6v38-4h7w-rj9h, GHSA-c5mf-xmp2-59rc, GHSA-fch4-3c6x-j4gc, GHSA-q686-2qmg-hqc7, GHSA-x4rv-c3wx-4cr8, GHSA-c73q-w75p-j82v); prevent unauthorized access to transformed components and potential OAuth client-secret disclosure in affected MCP client wrappers by updating FastMCP to 4.1.2 (GHSA-7xgj-8392-5q4r, GHSA-vqqp-x5qm-5qp4); reject oversized signed tokens before allocating their segments to prevent memory exhaustion by updating joserfc to 1.7.6 (GHSA-9pg5-8c7x-5hfx); avoid excessive CPU use while parsing untrusted DNS names by updating dnspython to 2.9.0 (GHSA-45c3-73f7-pv4m) (a9635d9).
 
 ### Fixed
 

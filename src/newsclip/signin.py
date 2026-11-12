@@ -278,6 +278,7 @@ def build_signin_app(*, runner: Callable | None = None, users_path: Path | None 
 
     from .composition import build_registry
     from .standalone import read_login_token
+    from .ui import renderer_options
 
     if runner is None and not policy_installed():
         raise ValueError(
@@ -339,6 +340,7 @@ def build_signin_app(*, runner: Callable | None = None, users_path: Path | None 
         novnc_dir=os.environ.get("NOVNC_DIR", "/opt/novnc"),
         start_params=start_params,
         title="Connect a news subscription",
+        **renderer_options(build_app),
     )
     app.state.windows = windows
     return app
@@ -347,11 +349,14 @@ def build_signin_app(*, runner: Callable | None = None, users_path: Path | None 
 def run_signin_service(*, host: str = "127.0.0.1", port: int = 8080) -> None:
     import uvicorn
 
+    from .log import uvicorn_log_config
+
     uvicorn.run(
         build_signin_app(),
         host=host,
         port=port,
         access_log=False,
+        log_config=uvicorn_log_config(),
         proxy_headers=False,
         server_header=False,
     )

@@ -28,6 +28,7 @@ from .acquisition import (
     MintFailureEvidence,
     MintFailureStage,
 )
+from .build_identity import DiagnosticIdentity, log_fields
 from .models import (
     INCIDENT_ID_PATTERN,
     AccessState,
@@ -364,7 +365,7 @@ TimingEvent = Annotated[
 ]
 
 
-class TimingRecord(FrozenModel):
+class TimingRecord(DiagnosticIdentity):
     schema_version: Literal[1] = 1
     operation_id: str = Field(pattern=_IDENTIFIER_PATTERN)
     invocation_id: str | None = Field(default=None, pattern=_IDENTIFIER_PATTERN)
@@ -508,17 +509,21 @@ class TimingRecorder:
         self.invocation_id = resolved_invocation
         self.run_mode = run_mode
         self.retention = retention
-        raw_revision = build_revision or os.environ.get("NEWSCLIP_BUILD_REVISION")
+        raw_revision = build_revision
         legacy_revision = (
             raw_revision
             if raw_revision is not None
             and re.fullmatch(r"[0-9a-f]{7,64}", raw_revision)
             else None
         )
-        selected_identity = build_identity or legacy_build_identity(
-            legacy_revision,
-            build_dirty if build_dirty is not None else _environment_dirty(),
-        )
+        if build_identity is not None:
+            selected_identity = build_identity
+        elif build_revision is not None or build_dirty is not None:
+            selected_identity = legacy_build_identity(legacy_revision, build_dirty)
+        else:
+            from .provenance import resolve_build_identity
+
+            selected_identity = resolve_build_identity(None)
         self.build_revision = selected_identity.revision
         self.build_dirty = selected_identity.dirty
         self.build_source_fingerprint = selected_identity.source_fingerprint
@@ -703,6 +708,7 @@ class _OperationState:
         try:
             sequence = self.sequence + 1
             record = TimingRecord(
+                **log_fields(),
                 operation_id=self.operation_id,
                 invocation_id=self.invocation_id,
                 sequence=sequence,
@@ -1168,15 +1174,6 @@ def _outcome(error: BaseException | None) -> TimingOutcome:
         if getattr(value, "value", value) == "timeout":
             return TimingOutcome.TIMEOUT
     return TimingOutcome.ERROR
-
-
-def _environment_dirty() -> bool | None:
-    value = os.environ.get("NEWSCLIP_BUILD_DIRTY")
-    if value == "1":
-        return True
-    if value == "0":
-        return False
-    return None
 
 
 def _environment_surface() -> TimingSurface:

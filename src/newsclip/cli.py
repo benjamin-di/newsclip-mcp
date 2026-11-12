@@ -2558,10 +2558,11 @@ def _fail(
 def run() -> None:
     """Console entry point: unwind on SIGTERM so browsers close, then run."""
 
+    from .log import run_command
     from .process_signals import exit_on_sigterm
 
     exit_on_sigterm()
-    app()
+    run_command(app)
 
 
 if __name__ == "__main__":

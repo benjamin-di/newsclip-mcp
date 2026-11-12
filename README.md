@@ -30,6 +30,8 @@ cd newsclip-mcp
 uv sync --locked --extra local --extra mcp --extra signin
 uv run python scripts/setup.py --user alice --user bob
 # Configure OIDC in .env as described in docs/DEPLOYMENT.md before startup.
+export NEWSCLIP_VERSION="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+export VCS_REF="$(git rev-parse HEAD)" # required if Compose builds source images
 docker compose up -d
 ```
 
@@ -89,6 +91,19 @@ Use the Docker Compose quick start above for the complete server and sign-in
 browser setup.
 
 ## Interfaces
+
+Retained diagnostics identify the installed application version, full source
+revision and an opaque process instance. Native MCP reports that same product
+version. Timing and browser traces retain their source fingerprints and read
+older records without assigning them the current build. Article, result and
+archive output keep their existing contracts.
+
+Release images and distributions embed identity before installation; runtime
+environment variables cannot relabel them. Noneditable installations reject a
+missing or conflicting stamp. Editable development reports an explicit
+unknown revision. Direct source packages must first run
+`uv run python scripts/embed-build-identity.py <product-version> <full-revision>`.
+Direct image builds require `VERSION` and full `VCS_REF` build arguments.
 
 For MCP, connect your client to
 `http://127.0.0.1:8000/users/alice/mcp` with Alice's bearer token. The server

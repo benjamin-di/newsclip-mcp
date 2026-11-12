@@ -3,9 +3,11 @@ from __future__ import annotations
 import ast
 import json
 import multiprocessing
+import shutil
 import socket
 import stat
 import subprocess
+import tempfile
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,6 +69,15 @@ from newsclip.browser_runtime.x11_pointer import (
 from newsclip.vision_planning import VisualPlan
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture
+def socket_dir():
+    """A short directory for live sockets: AF_UNIX paths are limited to about 108 bytes,
+    and pytest's tmp_path under a nested CI temporary root can exceed that."""
+    path = Path(tempfile.mkdtemp(prefix="nc-", dir="/tmp"))
+    yield path
+    shutil.rmtree(path, ignore_errors=True)
 
 
 class _FakeCFunction:
@@ -1035,12 +1046,13 @@ def test_dead_active_host_xvfb_releases_lease_before_restart(
 def test_host_xvfb_rejects_an_unleased_live_display(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    socket_dir: Path,
 ) -> None:
     environment = {
         "NEWSCLIP_XVFB_LEASE_DIR": str(tmp_path / "leases"),
         "NEWSCLIP_XVFB_DISPLAY": "2109",
     }
-    socket_root = tmp_path / "sockets"
+    socket_root = socket_dir / "sockets"
     socket_root.mkdir()
     socket_path = socket_root / "X2109"
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1090,8 +1102,9 @@ def test_host_xvfb_is_reaped_before_its_display_lease_is_released() -> None:
 def test_local_display_requires_a_live_x11_socket(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    socket_dir: Path,
 ) -> None:
-    socket_root = tmp_path / "x11"
+    socket_root = socket_dir / "x11"
     socket_root.mkdir()
     socket_path = socket_root / "X2109"
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -1214,8 +1227,9 @@ def test_default_docker_display_avoids_legacy_shared_number(tmp_path: Path) -> N
 
 def test_docker_display_lease_skips_live_socket_but_reclaims_stale_socket(
     tmp_path: Path,
+    socket_dir: Path,
 ) -> None:
-    socket_root = tmp_path / "sockets"
+    socket_root = socket_dir / "sockets"
     socket_root.mkdir()
     socket_path = socket_root / "X2109"
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

@@ -4,6 +4,12 @@ from importlib.util import find_spec
 
 
 def run() -> None:
+    from .log import run_command
+
+    run_command(_invoke)
+
+
+def _invoke() -> None:
     from .process_signals import exit_on_sigterm
 
     exit_on_sigterm()

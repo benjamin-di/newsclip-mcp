@@ -4,6 +4,9 @@ services:
     build:
       context: .
       target: server
+      args:
+        VERSION: ${NEWSCLIP_VERSION:-}
+        VCS_REF: ${VCS_REF:-}
     user: "${NEWSCLIP_UID:-1000}:${NEWSCLIP_GID:-1000}"
     ports:
       - "127.0.0.1:${NEWSCLIP_PORT:-8000}:8000"
@@ -44,6 +47,9 @@ services:
     build:
       context: .
       target: login
+      args:
+        VERSION: ${NEWSCLIP_VERSION:-}
+        VCS_REF: ${VCS_REF:-}
     user: "${NEWSCLIP_UID:-1000}:${NEWSCLIP_GID:-1000}"
     environment:
       NEWSCLIP_CONFIG_HOME: /config

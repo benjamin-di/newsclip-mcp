@@ -44,6 +44,7 @@ from ..browser_readiness import (
     ReadinessCoverageBucket,
     ReadinessTerminalState,
 )
+from ..build_identity import DiagnosticIdentity, log_fields
 from ..challenge_resolver import ChallengeResolution
 from ..challenges import ChallengeAcceptanceSource, ChallengeMode
 from ..errors import TransportFailure
@@ -777,7 +778,7 @@ _SCREENSHOT_LABEL = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _PROVIDER = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
 
-class RuntimeRecord(FrozenModel):
+class RuntimeRecord(DiagnosticIdentity):
     """One validated record from the durable runtime JSONL wire format."""
 
     schema_version: Literal[1] = 1
@@ -1369,6 +1370,7 @@ class RuntimeTrace:
     def _write(self, event: RuntimeEvent) -> None:
         next_sequence = self._sequence + 1
         payload = {
+            **log_fields(),
             "schema_version": 1,
             "run_id": self._run_id,
             "sequence": next_sequence,

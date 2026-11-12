@@ -20,16 +20,18 @@ RUN uv sync --locked --extra local --no-dev --extra mcp --extra signin --no-inst
  && groupadd --gid 1000 newsclip \
  && useradd --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin newsclip
 COPY src ./src
-RUN uv sync --locked --extra local --no-dev --extra mcp --extra signin
+COPY scripts/embed-build-identity.py /tmp/embed-build-identity.py
+COPY scripts/check-build-identity.py /tmp/check-build-identity.py
 ARG VCS_REF=unknown
 ARG IMAGE_VERSION=development
 ARG VERSION=${IMAGE_VERSION}
 ARG SOURCE_URL=https://github.com/benjamin-di/newsclip-mcp
 ARG BUILD_SOURCE_FINGERPRINT=
-ENV NEWSCLIP_BUILD_REVISION=${VCS_REF} NEWSCLIP_BUILD_DIRTY=0 \
-    NEWSCLIP_BUILD_SOURCE_FINGERPRINT=${BUILD_SOURCE_FINGERPRINT}
+RUN python /tmp/embed-build-identity.py "$VERSION" "$VCS_REF" \
+ && uv sync --locked --extra local --no-dev --extra mcp --extra signin --no-editable
+RUN python -I /tmp/check-build-identity.py "$VCS_REF" "$VERSION" --mcp
 RUN if [ -n "$BUILD_SOURCE_FINGERPRINT" ]; then \
-      test "$(python -c 'from pathlib import Path; from newsclip.provenance import build_source_identity; print(build_source_identity(Path("/app")).source_fingerprint)')" = "$BUILD_SOURCE_FINGERPRINT"; \
+      test "$(python -c 'from newsclip.build_identity import BUILD; print(BUILD.source_fingerprint)')" = "$BUILD_SOURCE_FINGERPRINT"; \
     fi
 LABEL org.opencontainers.image.title="Newsclip" \
       org.opencontainers.image.description="Private news search, reading and archiving with human sign-in" \

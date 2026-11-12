@@ -229,4 +229,6 @@ def connect(
 
 
 def run() -> None:
-    app()
+    from .log import run_command
+
+    run_command(app)

@@ -8,6 +8,9 @@ browser sign-in service and POSIX profile locks.
 checks. `make check-mcp` exercises protocol contracts. Tests marked `live` never
 run implicitly. Public CI requires no account, publisher or private service.
 
+See [build identity](BUILD_IDENTITY.md) for packaging checks, diagnostic surfaces
+and compatible shared renderer support.
+
 ## Validation matrix
 
 | Change | Required evidence |

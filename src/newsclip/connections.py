@@ -26,6 +26,7 @@ from .models import SessionStatus
 from .sessions import ServingSessions, SessionStore
 from .subscription_access import SubscriptionAccess
 from .tenancy import application_root, load_users, user_scope
+from .ui import renderer_options
 
 FRESH_SECONDS = (
     300  # Share and disconnect need an identity-provider confirmation at most this old
@@ -115,7 +116,12 @@ class ConnectionsConfig:
 class Connections:
     def __init__(self, config, users_path, *, transport=None, clock=time.time):
         self.config, self.users_path, self.clock = config, users_path, clock
-        self.auth = BrowserAuth(config.oidc, transport=transport, clock=clock)
+        self.auth = BrowserAuth(
+            config.oidc,
+            transport=transport,
+            clock=clock,
+            **renderer_options(BrowserAuth),
+        )
         self.home = urlsplit(config.oidc.public_url).path.rstrip("/") + "/connections/"
         self.relays, self.adapters, self.controls, self.links = {}, {}, {}, {}
         self.access: SubscriptionAccess | None = None
@@ -187,6 +193,7 @@ class Connections:
                 # (authorize refuses any other), so the window opens at once.
                 auto_start=True,
                 return_url=self.home,
+                **renderer_options(PageText),
             ),
             authorize=authorize,
             before_start=before_start,
@@ -326,7 +333,11 @@ class Connections:
 
     def page(self, body, *, refresh=False):
         return connection_page(
-            "News subscriptions", body, refresh=refresh, login_url=self.home + "login"
+            "News subscriptions",
+            body,
+            refresh=refresh,
+            login_url=self.home + "login",
+            **renderer_options(connection_page),
         )
 
     def form(self, action, provider, text, *, revision=None):
