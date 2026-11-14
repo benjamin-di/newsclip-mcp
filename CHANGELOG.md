@@ -3,6 +3,28 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.1.3] - 2026-11-14
+
+### Fixed
+
+- Require signin-window 0.8.2 for package installations, so an existing 0.8.1 installation cannot miss the mobile remote-input fix.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.1.2; saved sessions, account controls and storage formats are unchanged.
+
+## [2.1.2] - 2026-11-14
+
+### Fixed
+
+- Use signin-window 0.8.2 so phone users can open a keyboard in remote sign-in and edits remain bound to their original viewer.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.1.1; saved sessions, connection controls and account state are unchanged.
+
 ## [2.1.1] - 2026-11-12
 
 _Publishes the 2.1.0 changes, which the public mirror did not receive; the package is unchanged from 2.1.0._
