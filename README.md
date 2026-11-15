@@ -10,6 +10,11 @@ open a short-lived link and sign in on the publisher's page yourself. Newsclip
 keeps the verified session afterwards. It does not need your password in a
 configuration file or an assistant conversation.
 
+On a phone, select the field on the remote page, then tap **Keyboard** to type
+or **Paste** to insert copied text. **Done** dismisses the keyboard without
+submitting; use the page's own button to continue. **Zoom** enlarges the page,
+and dragging with one finger pans the view.
+
 - Ten built-in providers: Financial Times, WSJ, Bloomberg, CNBC, Reuters,
   The Economist, The New York Times, The Guardian, AP News and Axios.
 - Fair federated search with source status, date filters and coverage limits.

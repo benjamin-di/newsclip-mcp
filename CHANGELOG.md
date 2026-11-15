@@ -3,6 +3,18 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.1.4] - 2026-11-15
+
+### Fixed
+
+- Use the compact mobile sign-in viewer with native keyboard input, Paste and Zoom (586df79)
+- Preserve editor focus while allowing touch controls to activate on WebKit (586df79)
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.1.3; saved sessions, connection controls and storage formats are unchanged.
+
 ## [2.1.3] - 2026-11-14
 
 ### Fixed
