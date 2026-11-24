@@ -93,14 +93,24 @@ def test_child_command_is_bounded_and_raw_failure_output_is_never_logged(monkeyp
 
     commands = []
 
-    def run(args, **kwargs):
-        commands.append(args)
-        assert kwargs == {"capture_output": True, "check": False}
-        return subprocess.CompletedProcess(
-            args, 124, b"PRIVATE_STDOUT", b"PRIVATE_STDERR"
-        )
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            commands.append(args)
+            assert kwargs["stdin"] is subprocess.DEVNULL
+            assert kwargs["stdout"] is subprocess.PIPE
+            assert kwargs["stderr"] is subprocess.PIPE
+            assert kwargs["start_new_session"] is True
+            self.pid = 99999
+            self.returncode = 124
 
-    monkeypatch.setattr("newsclip.recovery_watch.subprocess.run", run)
+        def communicate(self):
+            return b"PRIVATE_STDOUT", b"PRIVATE_STDERR"
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr("newsclip.recovery_watch.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("newsclip.recovery_watch.os.killpg", lambda *_a: None)
     assert _run("ft", True, 20) == {
         "provider": "ft",
         "action": "recovery_worker_failed",

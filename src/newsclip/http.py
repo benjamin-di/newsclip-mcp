@@ -238,13 +238,38 @@ class CurlCffiHttpClient:
             if cookie_before is not None and initial_cookies is not None
             else None
         )
+        use_callback = _supports_content_callback(client)
+        request_headers = dict(headers) if headers else None
         try:
-            response = client.get(
-                url,
-                timeout=timeout,
-                allow_redirects=not bool(headers),
-                headers=dict(headers) if headers else None,
-            )
+            if use_callback:
+                buffer = bytearray()
+
+                def on_chunk(chunk: bytes) -> int:
+                    buffer.extend(chunk)
+                    if len(buffer) > MAX_RESPONSE_BYTES:
+                        raise _ResponseTooLargeError()
+                    return len(chunk)
+
+                response = client.get(
+                    url,
+                    timeout=timeout,
+                    allow_redirects=not bool(headers),
+                    headers=request_headers,
+                    content_callback=on_chunk,
+                )
+                raw_html = bytes(buffer)
+            else:
+                response = client.get(
+                    url,
+                    timeout=timeout,
+                    allow_redirects=not bool(headers),
+                    headers=request_headers,
+                )
+                raw_html = _read_response_bytes(response)
+        except _ResponseTooLargeError as error:
+            raise ProviderTransportError(
+                "provider HTTP response exceeds size limit", retryable=False
+            ) from error
         except CurlError as error:
             category = _curl_category(error)
             self._record_attempt(
@@ -290,6 +315,7 @@ class CurlCffiHttpClient:
             response,
             session_cookie_present=session_cookie_present,
             serving_transport=str(impersonate),
+            raw_html=raw_html,
         )
 
     def _record_attempt(
@@ -518,14 +544,77 @@ def _cookie_state(client: requests.Session) -> frozenset[tuple[object, ...]] | N
         return None
 
 
+MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+
+
+class _ResponseTooLargeError(Exception):
+    """Abort an in-flight curl_cffi transfer as soon as the byte cap is crossed."""
+
+
+def _supports_content_callback(client: object) -> bool:
+    return type(client).__module__.startswith("curl_cffi")
+
+
+def _parse_content_length(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(str(value).strip())
+    except ValueError:
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _read_response_bytes(
+    response: object,
+    *,
+    max_bytes: int = MAX_RESPONSE_BYTES,
+    streamed: bool = False,
+) -> bytes:
+    headers = getattr(response, "headers", None)
+    if headers is not None and hasattr(headers, "get"):
+        declared = _parse_content_length(headers.get("content-length"))
+        if declared is not None and declared > max_bytes:
+            closer = getattr(response, "close", None)
+            if callable(closer):
+                closer()
+            raise ProviderTransportError(
+                "provider HTTP response exceeds size limit", retryable=False
+            )
+    if streamed and callable(getattr(response, "iter_content", None)):
+        buffer = bytearray()
+        try:
+            for chunk in response.iter_content(chunk_size=65536):  # type: ignore[attr-defined]
+                if not chunk:
+                    continue
+                buffer.extend(chunk)
+                if len(buffer) > max_bytes:
+                    raise ProviderTransportError(
+                        "provider HTTP response exceeds size limit", retryable=False
+                    )
+        finally:
+            closer = getattr(response, "close", None)
+            if callable(closer):
+                closer()
+        return bytes(buffer)
+    content = bytes(response.content)  # type: ignore[attr-defined]
+    if len(content) > max_bytes:
+        raise ProviderTransportError(
+            "provider HTTP response exceeds size limit", retryable=False
+        )
+    return content
+
+
 def _raw_fetch(
     url: str,
     response: object,
     *,
     session_cookie_present: bool,
     serving_transport: str | None = None,
+    raw_html: bytes | None = None,
 ) -> RawFetch:
     headers = response.headers  # type: ignore[attr-defined]
+    body = raw_html if raw_html is not None else _read_response_bytes(response)
     try:
         return RawFetch.model_validate(
             {
@@ -537,7 +626,7 @@ def _raw_fetch(
                 "retrieved_at": datetime.now(UTC),
                 "session_cookie_present": session_cookie_present,
                 "serving_transport": serving_transport,
-                "raw_html": response.content,  # type: ignore[attr-defined]
+                "raw_html": body,
             }
         )
     except ValidationError as error:

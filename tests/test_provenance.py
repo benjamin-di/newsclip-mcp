@@ -27,7 +27,20 @@ def _repository(root: Path) -> Path:
     return root
 
 
-def test_complete_environment_cannot_relabel_source_development() -> None:
+def _unstamped_build(monkeypatch) -> None:
+    monkeypatch.setattr(
+        application_identity,
+        "BUILD",
+        application_identity.ApplicationBuild(
+            "newsclip",
+            application_identity.BUILD.version,
+            "unknown",
+        ),
+    )
+
+
+def test_complete_environment_cannot_relabel_source_development(monkeypatch) -> None:
+    _unstamped_build(monkeypatch)
     identity = resolve_build_identity(
         None,
         environment={
@@ -43,7 +56,10 @@ def test_complete_environment_cannot_relabel_source_development() -> None:
     assert identity.source_fingerprint is None
 
 
-def test_partial_environment_build_identity_is_explicitly_unavailable() -> None:
+def test_partial_environment_build_identity_is_explicitly_unavailable(
+    monkeypatch,
+) -> None:
+    _unstamped_build(monkeypatch)
     identity = resolve_build_identity(
         None,
         environment={"NEWSCLIP_BUILD_REVISION": "1234567"},
@@ -98,8 +114,10 @@ def test_runtime_uses_packaged_identity_without_inspecting_git(monkeypatch, tmp_
 
 
 def test_unstamped_development_stays_explicit_without_source_inspection(
+    monkeypatch,
     tmp_path: Path,
 ) -> None:
+    _unstamped_build(monkeypatch)
     identity = resolve_build_identity(tmp_path / "missing", environment={})
 
     assert identity.source is BuildIdentitySource.UNAVAILABLE

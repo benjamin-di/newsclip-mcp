@@ -20,6 +20,11 @@ from .tenancy import load_users, require_user
 
 _REVISION = re.compile(r"[a-f0-9]{32}\Z")
 _USE = frozenset({"subscription"})
+# Active registered users remain capped at 100 in tenancy.load_users; retained
+# enrollment history grows across normal user turnover and needs its own bound.
+_MAX_ENROLLED_USERS = 10_000
+_MAX_MANIFEST_BYTES = 1024 * 1024
+_MAX_RECORD_BYTES = 1024 * 1024
 
 
 def read_private_file(path, *, max_bytes):
@@ -105,18 +110,15 @@ class SubscriptionAccess:
         ):
             raise ValueError("private directory required")
 
-    def _manifest(self):
-        self._private_directory()
-        value = json.loads(
-            read_private_file(self.root / "manifest.json", max_bytes=32768)
-        )
+    @staticmethod
+    def _validate_manifest_data(value):
         if (
             not isinstance(value, dict)
             or set(value) != {"version", "users", "providers"}
             or type(value["version"]) is not int
             or value["version"] != 1
             or not isinstance(value["users"], list)
-            or len(value["users"]) > 100
+            or len(value["users"]) > _MAX_ENROLLED_USERS
             or len(set(value["users"])) != len(value["users"])
         ):
             raise ValueError("invalid manifest")
@@ -131,6 +133,23 @@ class SubscriptionAccess:
         ):
             raise ValueError("invalid providers")
         return value
+
+    def _manifest(self):
+        self._private_directory()
+        value = json.loads(
+            read_private_file(
+                self.root / "manifest.json", max_bytes=_MAX_MANIFEST_BYTES
+            )
+        )
+        return self._validate_manifest_data(value)
+
+    @classmethod
+    def _encode_manifest(cls, value) -> bytes:
+        cls._validate_manifest_data(value)
+        encoded = json.dumps(value).encode()
+        if len(encoded) > _MAX_MANIFEST_BYTES:
+            raise ValueError("manifest exceeds size limit")
+        return encoded
 
     def bootstrap(self, providers):
         """Adopt without touching credentials, controls, archives, holds or budgets."""
@@ -150,13 +169,13 @@ class SubscriptionAccess:
                     staging.mkdir(mode=0o700)
                     atomic_private_write(
                         staging / "manifest.json",
-                        json.dumps(
+                        self._encode_manifest(
                             {
                                 "version": 1,
                                 "users": sorted(users),
                                 "providers": providers,
                             }
-                        ).encode(),
+                        ),
                     )
                     for user in users:
                         atomic_private_write(
@@ -169,12 +188,20 @@ class SubscriptionAccess:
                 # New publishers need an explicit migration, never reader repair.
                 if not set(providers) <= set(manifest["providers"]):
                     raise ValueError("new publishers require a sharing-state migration")
-                for user in sorted(users - set(manifest["users"])):
+                new_users = sorted(users - set(manifest["users"]))
+                if new_users:
+                    proposed = {
+                        "version": manifest["version"],
+                        "users": [*manifest["users"], *new_users],
+                        "providers": list(manifest["providers"]),
+                    }
+                    self._encode_manifest(proposed)
+                for user in new_users:
                     if self.path(user).exists():
                         raise ValueError("unexpected retained user record")
                     manifest["users"].append(user)
                     atomic_private_write(
-                        self.root / "manifest.json", json.dumps(manifest).encode()
+                        self.root / "manifest.json", self._encode_manifest(manifest)
                     )
                     atomic_private_write(
                         self.path(user), self._initial(user, manifest["providers"])
@@ -250,7 +277,10 @@ class SubscriptionAccess:
                         or not _REVISION.fullmatch(choice["grant"])
                     ):
                         raise ValueError("invalid grant reference")
-                if not isinstance(row["grants"], dict) or len(row["grants"]) > 99:
+                if (
+                    not isinstance(row["grants"], dict)
+                    or len(row["grants"]) > _MAX_ENROLLED_USERS
+                ):
                     raise ValueError("invalid grants")
                 for member, grant in row["grants"].items():
                     require_user(member)
@@ -277,9 +307,10 @@ class SubscriptionAccess:
 
     def _write(self, actor, provider, data, row):
         data["providers"][provider] = row
-        atomic_private_write(
-            self.path(actor), json.dumps(data, sort_keys=True).encode()
-        )
+        encoded = json.dumps(data, sort_keys=True).encode()
+        if len(encoded) > _MAX_RECORD_BYTES:
+            raise ValueError("sharing record exceeds size limit")
+        atomic_private_write(self.path(actor), encoded)
 
     def _eligible(self, *actors):
         if not set(actors) <= self.users():
@@ -323,6 +354,60 @@ class SubscriptionAccess:
                     unavailable = True
             return row, offers, unavailable
 
+    def view_all(self, actor, providers):
+        """Read one consistent sharing snapshot for all providers under one lock."""
+        with self.lock():
+            active_users = self.users()
+            if actor not in active_users:
+                raise SessionRequiredError(
+                    "subscription access requires current registered users"
+                )
+            actor_data = self._read(actor)
+            other_users = sorted(active_users - {actor})
+            other_records = {}
+            unavailable_owners = False
+            for owner in other_users:
+                try:
+                    other_records[owner] = self._read(owner)
+                except PersistenceError:
+                    unavailable_owners = True
+            snapshots = {}
+            for provider in providers:
+                row = self._row(actor_data, actor, provider)
+                offers = []
+                unavailable = unavailable_owners
+                for owner in other_users:
+                    owner_data = other_records.get(owner)
+                    if owner_data is None:
+                        continue
+                    try:
+                        candidate = self._row(owner_data, owner, provider)
+                        if actor in candidate["grants"]:
+                            offers.append((owner, candidate["grants"][actor]))
+                    except PersistenceError:
+                        unavailable = True
+                selected = _selection(row)
+                admitted_ok = True
+                if selected.choice and selected.choice.owner != actor:
+                    owner = selected.choice.owner
+                    if owner not in active_users or owner not in other_records:
+                        admitted_ok = False
+                    else:
+                        try:
+                            owner_row = self._row(other_records[owner], owner, provider)
+                            grant = _grant(owner_row["grants"].get(actor))
+                            _rules(
+                                sharing.resolve,
+                                actor,
+                                selected,
+                                grant,
+                                capability="subscription",
+                            )
+                        except (PersistenceError, SessionRequiredError):
+                            admitted_ok = False
+                snapshots[provider] = (row, offers, unavailable, admitted_ok)
+            return snapshots, set(other_users)
+
     def choose(self, actor, provider, owner, expected, grant):
         with self.lock():
             self._eligible(actor, owner)
@@ -360,6 +445,10 @@ class SubscriptionAccess:
                 expected=expected,
                 capabilities=_USE,
             )
+            if member not in row["grants"] and (
+                len(row["grants"]) >= _MAX_ENROLLED_USERS
+            ):
+                raise ValueError("too many retained grants")
             row["grants"][member] = grant.revision
             self._write(owner, provider, data, row)
 

@@ -175,7 +175,12 @@ def detect_archive_drift(
     decision), so this is safe to run against a live archive.
     """
 
-    snapshots = archive.current_raw_snapshots(provider=provider)
+    iter_snapshots = getattr(archive, "iter_current_raw_snapshots", None)
+    snapshots = (
+        iter_snapshots(provider=provider)
+        if callable(iter_snapshots)
+        else archive.current_raw_snapshots(provider=provider)
+    )
     findings: list[DriftFinding] = []
     skipped: list[str] = []
     checked = 0
@@ -199,8 +204,11 @@ def detect_archive_drift(
             if (
                 native.state is ProviderNativeExtractionState.VALID
                 and native.assessment is not None
-                and fresh.access_state
-                not in {AccessState.AUTH_REQUIRED, AccessState.BLOCKED}
+                and not (
+                    fresh.access_state
+                    in {AccessState.AUTH_REQUIRED, AccessState.BLOCKED}
+                    or not fresh.identity_match
+                )
             ):
                 fresh = native.assessment
             elif (

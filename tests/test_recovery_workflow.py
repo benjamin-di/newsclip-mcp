@@ -257,12 +257,20 @@ def test_malformed_worker_output_settles_failed_and_requests_review(
     tmp_path, monkeypatch
 ):
     keeper, sessions, store, _, _, clock = _workflow(tmp_path)
-    monkeypatch.setattr(
-        "newsclip.recovery_watch.subprocess.run",
-        lambda *args, **kwargs: SimpleNamespace(
-            stdout=b"PRIVATE broken output", returncode=1
-        ),
-    )
+
+    class FakePopen:
+        def __init__(self, *args, **kwargs):
+            self.pid = 99999
+            self.returncode = 1
+
+        def communicate(self):
+            return b"PRIVATE broken output", b""
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr("newsclip.recovery_watch.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("newsclip.recovery_watch.os.killpg", lambda *_a: None)
     watcher = RecoveryWatch(
         store, ("ft",), allow_credentials=True, runner=_run, utc_now=lambda: clock.now
     )

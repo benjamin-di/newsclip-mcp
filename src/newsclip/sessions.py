@@ -984,7 +984,7 @@ class SessionStore:
                 raise PersistenceError(
                     "browser profile directory must not be a symlink"
                 )
-            paths = []
+            paths: list[Path] = []
             if base.parent.exists():
                 for path in base.parent.iterdir():
                     suffix = path.name.removeprefix(base.name + "--")
@@ -994,9 +994,30 @@ class SessionStore:
                         and all(c in "0123456789abcdef" for c in suffix)
                     ):
                         paths.append(path)
+            expected_profile = (
+                (
+                    self._profiles.path(
+                        provider,
+                        account_key,
+                        profile_id=stored.artifact.browser_profile_id,
+                    )
+                    if self._profiles is not None
+                    else self.root
+                    / "browser-profiles"
+                    / provider
+                    / f"{account_key}--{stored.artifact.browser_profile_id.hex}"
+                )
+                if stored.artifact is not None
+                and stored.artifact.browser_profile_id is not None
+                else base
+            )
+            if expected_profile not in paths:
+                paths.append(expected_profile)
             for profile in paths:
                 try:
                     with self._leases.profile(profile, timeout_seconds=1):
+                        if not profile.exists() and not profile.is_symlink():
+                            continue
                         if profile.is_symlink() or not profile.is_dir():
                             raise PersistenceError(
                                 "browser profile cannot be safely removed"

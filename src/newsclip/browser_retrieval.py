@@ -276,6 +276,7 @@ class PatchrightBrowserRetriever:
         retain_profile: bool = True,
         session_cookie_domains: Mapping[str, frozenset[str]] | None = None,
         authorize_session: Callable[[SessionArtifact], None] | None = None,
+        verify_serving_generation: Callable[..., None] | None = None,
     ) -> None:
         self._headless = headless
         self._context_factory = context_factory
@@ -323,6 +324,7 @@ class PatchrightBrowserRetriever:
         self._retain_profile = retain_profile
         self._session_cookie_domains = dict(session_cookie_domains or {})
         self._authorize_session = authorize_session
+        self._verify_serving_generation = verify_serving_generation
         self._lock = threading.RLock()
         self._held: _HeldProfile | None = None
         self._closed = False
@@ -352,12 +354,15 @@ class PatchrightBrowserRetriever:
         with self._lock:
             if self._closed or not self._retain_profile:
                 return
-            if self._authorize_session is not None:
-                self._authorize_session(session)
+            auth_fn = self._verify_serving_generation or self._authorize_session
+            authorize = (lambda: auth_fn(session)) if auth_fn is not None else None
+            if authorize is not None:
+                authorize()
             page, _recovery = self._ensure_page(
                 Path(self._profile_ref(session.provider, session)),
                 provider=session.provider,
                 portable_cookies=tuple(session.cookies),
+                authorize=authorize,
             )
             # Affinity navigation is intentionally omitted: a homepage hop can
             # cost more than it saves on the subsequent article get.
@@ -468,8 +473,29 @@ class PatchrightBrowserRetriever:
         try:
             with self._operation_lock(budget):
                 try:
-                    if session is not None and self._authorize_session is not None:
-                        self._authorize_session(session)
+                    if session is None:
+                        authorize = None
+                    elif (
+                        role in {HttpOperationRole.FETCH, HttpOperationRole.SEARCH}
+                        and self._verify_serving_generation is not None
+                    ):
+                        verify_fn = self._verify_serving_generation
+                        authorize = lambda: verify_fn(session)  # noqa: E731
+                    elif (
+                        profile_capture is not None
+                        and self._verify_serving_generation is not None
+                    ):
+                        verify_fn = self._verify_serving_generation
+                        authorize = lambda: verify_fn(  # noqa: E731
+                            session, require_verified=False
+                        )
+                    elif self._authorize_session is not None:
+                        auth_fn = self._authorize_session
+                        authorize = lambda: auth_fn(session)  # noqa: E731
+                    else:
+                        authorize = None
+                    if authorize is not None:
+                        authorize()
                     if self._closed:
                         raise ProviderTransportError(
                             "browser retrieval plane is closed"
@@ -478,6 +504,7 @@ class PatchrightBrowserRetriever:
                         Path(profile_ref),
                         provider=provider,
                         portable_cookies=portable_cookies,
+                        authorize=authorize,
                     )
                     held_browser = (
                         self._held.browser if self._held is not None else None
@@ -873,6 +900,7 @@ class PatchrightBrowserRetriever:
         *,
         provider: str,
         portable_cookies: tuple[PortableCookie, ...],
+        authorize: Callable[[], None] | None = None,
     ) -> tuple[Any, bool]:
         if self._require_virtual_display and self._runtime is None:
             raise BrowserRuntimeError(
@@ -888,6 +916,11 @@ class PatchrightBrowserRetriever:
         lease = self._leases.hold_profile(profile)
         factory_context = None
         try:
+            # Recheck the durable connection barrier under the cross-process
+            # profile lease so a disconnect that completed while we waited
+            # cannot be undone by recreating and seeding the removed profile.
+            if authorize is not None:
+                authorize()
             seed_recovery_profile = bool(portable_cookies) and (
                 not profile.exists() or not any(profile.iterdir())
             )
@@ -1242,16 +1275,105 @@ def _attempt_purpose(role: HttpOperationRole) -> AttemptPurpose:
     return AttemptPurpose.RETRIEVE
 
 
+_BOUNDED_HTML_SCRIPT = """(limit) => {
+    const dt = document.doctype;
+    const doctype = dt
+        ? `<!DOCTYPE ${dt.name}${dt.publicId ? ` PUBLIC "${dt.publicId}"` : ""}${
+            !dt.publicId && dt.systemId ? " SYSTEM" : ""
+          }${dt.systemId ? ` "${dt.systemId}"` : ""}>\\n`
+        : "";
+    const html = document.documentElement ? document.documentElement.outerHTML : "";
+    const combined = doctype + html;
+    if (new TextEncoder().encode(combined).length > limit) {
+        return null;
+    }
+    return combined;
+}"""
+
+
+def read_bounded_page_content(
+    page,  # noqa: ANN001
+    *,
+    max_bytes: int | None = None,
+) -> bytes:
+    """Capture rendered HTML while rejecting oversized DOMs inside the browser."""
+
+    from .http import MAX_RESPONSE_BYTES
+
+    limit = MAX_RESPONSE_BYTES if max_bytes is None else max_bytes
+    evaluate = getattr(page, "evaluate", None)
+    if callable(evaluate):
+        try:
+            captured = evaluate(_BOUNDED_HTML_SCRIPT, limit)
+        except TypeError:
+            # Test fakes may accept only a single script argument.
+            captured = evaluate(_BOUNDED_HTML_SCRIPT)
+        except Exception as error:
+            raise ProviderTransportError(
+                "browser response content capture failed"
+            ) from error
+        if captured is None:
+            raise ProviderTransportError(
+                "browser response exceeds size limit", retryable=False
+            )
+        if isinstance(captured, int):
+            if captured > limit:
+                raise ProviderTransportError(
+                    "browser response exceeds size limit", retryable=False
+                )
+            captured = page.content()
+        elif not isinstance(captured, str) and not type(page).__module__.startswith(
+            ("patchright", "playwright")
+        ):
+            # Non-Playwright test fakes may stub evaluate() for unrelated probes.
+            captured = page.content()
+        if not isinstance(captured, str):
+            raise ProviderTransportError("browser response content is invalid")
+        encoded = captured.encode("utf-8", "replace")
+    else:
+        raw = page.content()
+        if not isinstance(raw, str):
+            raise ProviderTransportError("browser response content is invalid")
+        encoded = raw.encode("utf-8", "replace")
+    if len(encoded) > limit:
+        raise ProviderTransportError(
+            "browser response exceeds size limit", retryable=False
+        )
+    return encoded
+
+
 def _response_content(response, page) -> tuple[str, bytes]:  # noqa: ANN001
     """Preserve rendered HTML while retaining raw bodies for JSON endpoints."""
 
+    from .http import MAX_RESPONSE_BYTES, _parse_content_length
+
+    declared = None
+    headers = getattr(response, "headers", None)
+    if isinstance(headers, Mapping):
+        declared = _parse_content_length(headers.get("content-length"))
+    if declared is None:
+        header_value = getattr(response, "header_value", None)
+        if callable(header_value):
+            with suppress(Exception):
+                declared = _parse_content_length(header_value("content-length"))
+    if declared is not None and declared > MAX_RESPONSE_BYTES:
+        raise ProviderTransportError(
+            "browser response exceeds size limit", retryable=False
+        )
     content_type = _response_content_type(response)
     if _is_html(content_type):
-        return content_type, page.content().encode("utf-8", "replace")
+        return content_type, read_bounded_page_content(
+            page, max_bytes=MAX_RESPONSE_BYTES
+        )
     body = getattr(response, "body", None)
     if not callable(body):
         raise ProviderTransportError("browser response body is unavailable")
-    return content_type, bytes(body())
+    raw_body = bytes(body())
+    if len(raw_body) > MAX_RESPONSE_BYTES:
+        raise ProviderTransportError(
+            "browser response exceeds size limit", retryable=False
+        )
+    return content_type, raw_body
 
 
 def _response_content_type(response: object) -> str:

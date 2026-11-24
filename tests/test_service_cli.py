@@ -1783,7 +1783,7 @@ def test_get_auto_auth_uses_quiet_scoped_child_and_resumes_exact_url(
         "ft",
         "--headless",
         "--challenge-mode",
-        "auto",
+        "detect-only",
         "--quiet",
         "--json",
     ]

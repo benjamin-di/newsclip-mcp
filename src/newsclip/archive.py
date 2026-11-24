@@ -11,7 +11,7 @@ import sqlite3
 import stat
 import tempfile
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import suppress
 from functools import lru_cache
 from pathlib import Path
@@ -23,6 +23,7 @@ from .articles import build_article
 from .contracts import ExtractionEngine
 from .errors import ContentNotFullError, PersistenceError
 from .models import (
+    AccessState,
     ArchiveIntegrity,
     ArchiveIntegrityStatus,
     Article,
@@ -30,6 +31,7 @@ from .models import (
     ExtractedArticle,
     RawFetch,
 )
+from .private_state import exclusive_lock
 from .providers.base import (
     ProviderNativeExtraction,
     ProviderNativeExtractionState,
@@ -375,12 +377,13 @@ class ArchiveStore:
         finally:
             connection.close()
 
-    def current_raw_snapshots(
+    def iter_current_raw_snapshots(
         self, *, provider: str | None = None
-    ) -> list[tuple[str, str, RawFetch, ArticleAssessment]]:
-        """Return ``(article_id, provider, raw_fetch, stored_assessment)`` for
-        every current accepted extraction. Read-only: it decompresses archived
-        raw bytes for drift re-assessment but never writes or moves a pointer."""
+    ) -> Iterator[tuple[str, str, RawFetch, ArticleAssessment]]:
+        """Stream ``(article_id, provider, raw_fetch, stored_assessment)`` for
+        every current accepted extraction from one consistent SQLite snapshot.
+        Read-only: it decompresses archived raw bytes one row at a time for
+        drift re-assessment without materializing the entire corpus in memory."""
 
         sql = (
             "SELECT a.id AS article_id, a.provider AS provider, "
@@ -400,44 +403,55 @@ class ArchiveStore:
         sql += " ORDER BY a.id"
         connection = self._connect()
         try:
-            rows = connection.execute(sql, parameters).fetchall()
+            connection.execute("BEGIN")
+            cursor = connection.execute(sql, parameters)
+            while True:
+                row = cursor.fetchone()
+                if row is None:
+                    break
+                try:
+                    raw_html = gzip.decompress(row["raw_html_gzip"])
+                    if hashlib.sha256(raw_html).hexdigest() != row["raw_sha256"]:
+                        raise PersistenceError(
+                            "archived raw fetch hash is inconsistent"
+                        )
+                    fetch = RawFetch(
+                        requested_url=row["requested_url"],
+                        final_url=row["final_url"],
+                        http_status=row["http_status"],
+                        content_type=row["content_type"],
+                        retry_after=row["retry_after"],
+                        retrieved_at=row["retrieved_at"],
+                        session_cookie_present=bool(row["session_cookie_present"]),
+                        serving_transport=row["serving_transport"],
+                        raw_html=raw_html,
+                    )
+                    assessment = ArticleAssessment.model_validate_json(
+                        row["assessment_json"]
+                    )
+                    _validate_fetch_evidence(row, fetch)
+                except (
+                    EOFError,
+                    OSError,
+                    TypeError,
+                    ValueError,
+                    ValidationError,
+                    zlib.error,
+                ) as error:
+                    raise PersistenceError("archived raw fetch is corrupt") from error
+                yield (row["article_id"], row["provider"], fetch, assessment)
         except sqlite3.Error as error:
             raise PersistenceError("archive snapshot read failed") from error
         finally:
             connection.close()
 
-        snapshots: list[tuple[str, str, RawFetch, ArticleAssessment]] = []
-        for row in rows:
-            try:
-                raw_html = gzip.decompress(row["raw_html_gzip"])
-                if hashlib.sha256(raw_html).hexdigest() != row["raw_sha256"]:
-                    raise PersistenceError("archived raw fetch hash is inconsistent")
-                fetch = RawFetch(
-                    requested_url=row["requested_url"],
-                    final_url=row["final_url"],
-                    http_status=row["http_status"],
-                    content_type=row["content_type"],
-                    retry_after=row["retry_after"],
-                    retrieved_at=row["retrieved_at"],
-                    session_cookie_present=bool(row["session_cookie_present"]),
-                    serving_transport=row["serving_transport"],
-                    raw_html=raw_html,
-                )
-                assessment = ArticleAssessment.model_validate_json(
-                    row["assessment_json"]
-                )
-                _validate_fetch_evidence(row, fetch)
-            except (
-                EOFError,
-                OSError,
-                TypeError,
-                ValueError,
-                ValidationError,
-                zlib.error,
-            ) as error:
-                raise PersistenceError("archived raw fetch is corrupt") from error
-            snapshots.append((row["article_id"], row["provider"], fetch, assessment))
-        return snapshots
+    def current_raw_snapshots(
+        self, *, provider: str | None = None
+    ) -> list[tuple[str, str, RawFetch, ArticleAssessment]]:
+        """Return ``(article_id, provider, raw_fetch, stored_assessment)`` for
+        every current accepted extraction."""
+
+        return list(self.iter_current_raw_snapshots(provider=provider))
 
     def search(
         self,
@@ -535,8 +549,16 @@ class ArchiveStore:
         if isinstance(provider, ProviderNativeExtraction):
             native = provider.native_extraction(str(fetch.requested_url), fetch)
             if native.state is ProviderNativeExtractionState.INVALID:
-                raise ContentNotFullError("insufficient_article_structure")
-            if native.state is ProviderNativeExtractionState.VALID:
+                if assessment.access_state not in {
+                    AccessState.AUTH_REQUIRED,
+                    AccessState.BLOCKED,
+                }:
+                    raise ContentNotFullError("insufficient_article_structure")
+            elif native.state is ProviderNativeExtractionState.VALID and not (
+                assessment.access_state
+                in {AccessState.AUTH_REQUIRED, AccessState.BLOCKED}
+                or not assessment.identity_match
+            ):
                 if (
                     native.extraction is None
                     or native.assessment is None
@@ -847,16 +869,22 @@ class ArchiveStore:
             connection.close()
 
     def _initialize(self) -> None:
+        lock = None
         try:
             self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             os.chmod(self.path.parent, 0o700)
+            lock = exclusive_lock(
+                self.path.parent / f".{self.path.name}.init.lock",
+                timeout_seconds=30,
+            )
+            lock.__enter__()
             if not self.path.exists():
                 descriptor = os.open(
                     self.path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600
                 )
                 os.close(descriptor)
             os.chmod(self.path, 0o600)
-            connection = sqlite3.connect(self.path)
+            connection = sqlite3.connect(self.path, timeout=30)
             try:
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
                 if version > SCHEMA_VERSION:
@@ -905,6 +933,9 @@ class ArchiveStore:
             raise
         except (sqlite3.Error, OSError) as error:
             raise PersistenceError("archive initialization failed") from error
+        finally:
+            if lock is not None:
+                lock.__exit__(None, None, None)
 
     def _connect(self) -> sqlite3.Connection:
         try:
@@ -1126,9 +1157,30 @@ class ArchiveStore:
                 word_count=row["word_count"],
             )
         for row in connection.execute(
-            "SELECT assessment_json FROM extraction_assessments"
+            "SELECT ea.assessment_json, e.id AS extraction_id, "
+            "a.current_extraction_id, a.provider AS article_provider, "
+            "a.provider_article_id, a.canonical_url, f.provider AS fetch_provider "
+            "FROM extraction_assessments ea "
+            "JOIN extractions e ON e.id = ea.extraction_id "
+            "JOIN articles a ON a.id = e.article_id "
+            "JOIN fetches f ON f.id = e.fetch_id"
         ):
-            ArticleAssessment.model_validate_json(row["assessment_json"])
+            assessment = ArticleAssessment.model_validate_json(row["assessment_json"])
+            is_current = row["extraction_id"] == row["current_extraction_id"]
+            if row["fetch_provider"] != row["article_provider"]:
+                raise PersistenceError(
+                    "archived extraction assessment mismatches its article"
+                )
+            if assessment.promotable and (
+                assessment.canonical_url is None
+                or assessment.provider_article_id != row["provider_article_id"]
+                or (
+                    is_current and str(assessment.canonical_url) != row["canonical_url"]
+                )
+            ):
+                raise PersistenceError(
+                    "archived extraction assessment mismatches its article"
+                )
 
     def _validate_article(
         self,

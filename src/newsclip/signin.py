@@ -111,12 +111,16 @@ def human_signin(
     profile.mkdir(mode=0o700, parents=True)
     published = False
     service = None
+    store: SessionStore | None = None
     service_closed = False
+    candidate = None
+    proof = None
     try:
         service = (service_factory or build_auth_service)(user=user)
-        store = service._sessions
-        if not isinstance(store, SessionStore):
+        loaded_store = service._sessions
+        if not isinstance(loaded_store, SessionStore):
             raise RuntimeError("sign-in service requires a session manager")
+        store = loaded_store
         if store.root.resolve() != root.resolve():
             raise RuntimeError("sign-in and reader must use the same user state root")
         expected_generation = store.current_generation(provider_key, account_key)
@@ -170,8 +174,6 @@ def human_signin(
                 )
                 window.waiting(urlsplit(page.url).hostname or "")
                 verifying = False
-                candidate = None
-                proof = None
                 while (
                     not window.cancelled.is_set() and time.monotonic() < window.deadline
                 ):
@@ -219,6 +221,8 @@ def human_signin(
                         )
                     if responses:
                         response = responses[-1]
+                        from .browser_retrieval import read_bounded_page_content
+
                         proof = RawFetch(
                             requested_url=HttpUrl(recipe.verification_url),
                             final_url=HttpUrl(page.url),
@@ -227,7 +231,7 @@ def human_signin(
                             retrieved_at=now,
                             session_cookie_present=True,
                             serving_transport="browser",
-                            raw_html=page.content().encode(),
+                            raw_html=read_bounded_page_content(page),
                         )
                         verification = recipe.verify_fetch(proof)
                         if verification.verified:
@@ -269,7 +273,25 @@ def human_signin(
                 service.close()
         finally:
             if not published:
-                shutil.rmtree(profile, ignore_errors=True)
+                keep_profile = False
+                if store is not None:
+                    try:
+                        committed = store._read_stored_session(
+                            store._state_path(provider_key, account_key),
+                            provider_key,
+                            account_key,
+                        )
+                        keep_profile = bool(
+                            committed is not None
+                            and committed.artifact is not None
+                            and committed.artifact.browser_profile_id == profile_id
+                        )
+                    except Exception:
+                        # If the committed session cannot be verified, avoid
+                        # deleting a profile that publication may have adopted.
+                        keep_profile = candidate is not None
+                if not keep_profile:
+                    shutil.rmtree(profile, ignore_errors=True)
 
 
 def build_signin_app(*, runner: Callable | None = None, users_path: Path | None = None):

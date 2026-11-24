@@ -146,6 +146,14 @@ def _command_response(payload: dict[str, Any]) -> dict[str, Any]:
 
     if payload.get("ok") is False:
         return payload
+    if payload.get("exit_code", 0) != 0 and set(payload) <= {"exit_code"}:
+        return {
+            "ok": False,
+            "category": "transport",
+            "exit_code": int(payload["exit_code"]),
+            "message": "operator command failed",
+            "detail": "operator CLI exited without a structured result",
+        }
     return {"ok": True, "result": payload}
 
 
@@ -474,7 +482,9 @@ def build_ops_server(adapter: OpsAdapter | None = None):
             from .secret_reference import OpSecretReader, SecretResolutionError
 
             try:
-                cookies_json = OpSecretReader().read(op_reference)
+                cookies_json = await anyio.to_thread.run_sync(
+                    OpSecretReader().read, op_reference
+                )
             except SecretResolutionError:
                 return {
                     "ok": False,

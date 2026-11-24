@@ -29,7 +29,7 @@ from newsclip.composition import (
 from newsclip.configured_provider import ConfiguredProvider
 from newsclip.errors import OperatorActionRequiredError, PersistenceError, UsageError
 from newsclip.models import RawFetch
-from newsclip.provenance import BuildIdentitySource
+from newsclip.provenance import resolve_build_identity
 from newsclip.provider_config import load_builtin_provider_specs
 from newsclip.provider_guard import ProviderGuardBusyError
 from newsclip.providers.ap import ApProvider
@@ -413,10 +413,13 @@ def test_default_service_wires_cookie_store_and_bloomberg_browser_plane(
     monkeypatch.delenv("NEWSCLIP_BUILD_SOURCE_FINGERPRINT", raising=False)
     service = build_service()
 
+    expected_identity = resolve_build_identity(None)
     assert isinstance(service._sessions, SessionStore)
     assert service._timing is not None
-    assert service._timing.build_identity_source is BuildIdentitySource.UNAVAILABLE
-    assert service._timing.build_source_fingerprint is None
+    assert service._timing.build_identity_source is expected_identity.source
+    assert (
+        service._timing.build_source_fingerprint == expected_identity.source_fingerprint
+    )
     assert service._browser_retriever is not None
     assert not (service._sessions.root / "traces").exists()
     assert set(service._sessions._adapters) == {

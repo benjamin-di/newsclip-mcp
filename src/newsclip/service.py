@@ -6,7 +6,7 @@ import hashlib
 import time
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor, wait
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from contextvars import copy_context
 from dataclasses import dataclass, field, replace
@@ -1936,10 +1936,14 @@ class NewsclipService:
                 extractor_name=self._extractor.name,
                 extractor_version=self._extractor.version,
             )
-        if assessment.access_state in {
-            AccessState.AUTH_REQUIRED,
-            AccessState.BLOCKED,
-        }:
+        if (
+            assessment.access_state
+            in {
+                AccessState.AUTH_REQUIRED,
+                AccessState.BLOCKED,
+            }
+            or not assessment.identity_match
+        ):
             return evaluation
         if assessment.promotable:
             return _native_evaluation(fetch, native)
@@ -2699,6 +2703,13 @@ class _ProviderPagerState:
     missing_published_count: int = 0
     undated_excluded_count: int = 0
     coverage_start: datetime | None = None
+    in_flight: (
+        tuple[
+            str | None,
+            Future[tuple[ProviderSearchPage | None, NewsclipError | None]],
+        ]
+        | None
+    ) = None
 
 
 class FederatedSearchPager:
@@ -2855,42 +2866,54 @@ class FederatedSearchPager:
             except _SEARCH_FAILURES as error:
                 return None, error
 
+        futures: dict[
+            str, Future[tuple[ProviderSearchPage | None, NewsclipError | None]]
+        ] = {}
+        to_submit: list[_ProviderPagerState] = []
+        for state in states:
+            if state.in_flight is not None and state.in_flight[0] == state.next_url:
+                futures[state.provider.key] = state.in_flight[1]
+            else:
+                to_submit.append(state)
+
         # Not a context manager: leaving one joins every worker, which is
         # exactly the wait the deadline exists to bound.
-        executor = ThreadPoolExecutor(max_workers=len(states))
+        executor = ThreadPoolExecutor(max_workers=len(to_submit)) if to_submit else None
         try:
-            futures = {
-                state.provider.key: executor.submit(
-                    copy_context().run,
-                    run,
-                    state,
-                    state.next_url,
-                    state.metadata_fetch_budget,
-                )
-                for state in states
-            }
+            if executor is not None:
+                for state in to_submit:
+                    future = executor.submit(
+                        copy_context().run,
+                        run,
+                        state,
+                        state.next_url,
+                        state.metadata_fetch_budget,
+                    )
+                    state.in_flight = (state.next_url, future)
+                    futures[state.provider.key] = future
             wait(
                 futures.values(),
                 timeout=max(0.0, deadline - time.monotonic()),
             )
         finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=False)
         for state in states:
             key = state.provider.key
             fetch_counts[key] += 1
             future = futures[key]
             if not future.done() or future.cancelled():
-                # A straggler is abandoned, never collected: its worker keeps
-                # running to its own transport timeouts, but only this caller
-                # thread applies a page to pager state, and it never reads
-                # this future again. The request keeps its continuation, so
-                # the next batch re-requests the same page; nothing a late
-                # result carries can advance, duplicate, or reorder it.
+                # Keep the single in-flight future on the provider state so the
+                # next batch awaits the same running work instead of submitting
+                # a duplicate concurrent request for the same continuation.
+                if future.cancelled():
+                    state.in_flight = None
                 state.retryable_error = ProviderTransportError(
                     f"{key} search page exceeded the batch deadline",
                     category=TransportFailure.TIMEOUT,
                 )
                 continue
+            state.in_flight = None
             page, error = future.result()
             if error is not None:
                 if state.started and not isinstance(error, ProviderContractError):

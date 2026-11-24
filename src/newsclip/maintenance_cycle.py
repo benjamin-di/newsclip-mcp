@@ -246,12 +246,15 @@ def run_command(
     arguments: list[str], *, timeout: int, lock_fd: int
 ) -> tuple[int, dict]:
     """Bound children, discard stderr, and never return arbitrary process output."""
+    child_env = os.environ.copy()
+    child_env.pop("NEWSCLIP_USER", None)
     with tempfile.TemporaryFile() as output:
         child = subprocess.Popen(
             under_timeout([sys.executable, "-m", "newsclip", *arguments], timeout),
             stdin=subprocess.DEVNULL,
             stdout=output,
             stderr=subprocess.DEVNULL,
+            env=child_env,
             pass_fds=(lock_fd,),
             start_new_session=True,
         )
@@ -290,6 +293,7 @@ def run_maintenance_cycle(
     max_age_hours: float = 12,
     allow_credential_mint: bool = False,
     check_interval: int = 86400,
+    user: str | None = None,
     on_start: Callable[[], None] | None = None,
     runner: Callable = run_command,
     now: Callable[[], float] = time.time,
@@ -311,6 +315,9 @@ def run_maintenance_cycle(
         or not 0 < max_age_hours <= 8760
     ):
         raise ValueError("invalid bounded maintenance configuration")
+    from .tenancy import current_user, require_user
+
+    selected_user = require_user(user) if user is not None else current_user()
     results = []
     with cycle_lease(root) as lock_fd:
         if mode == "check" and not reserve_check_window(
@@ -334,6 +341,8 @@ def run_maintenance_cycle(
             )
             if mode == "keep" and allow_credential_mint:
                 arguments.append("--allow-credential-mint")
+            if selected_user is not None:
+                arguments = ["--user", selected_user, *arguments]
             code = 1
             try:
                 code, data = runner(arguments, timeout=timeout, lock_fd=lock_fd)

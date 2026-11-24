@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import suppress
 from datetime import UTC, datetime
 
 from .build_identity import log_fields
@@ -23,7 +26,45 @@ from .provider_keys import is_provider_key
 from .recovery import RecoveryStore
 
 
-def _run(provider: str, allow_credentials: bool, timeout: int) -> dict[str, object]:
+def _terminate_child_group(
+    child: subprocess.Popen[bytes],
+    grace: float = 5.0,
+    *,
+    allow_exited_leader: bool = False,
+) -> None:
+    if not allow_exited_leader and child.poll() is not None:
+        return
+    pgid = child.pid
+    if pgid <= 0:
+        return
+    with suppress(ProcessLookupError, PermissionError):
+        os.killpg(pgid, signal.SIGTERM)
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if child.poll() is not None:
+            # Leader exited; check if any descendant in the process group survives.
+            try:
+                os.killpg(pgid, 0)
+            except (ProcessLookupError, PermissionError):
+                return
+        time.sleep(0.05)
+    # Escalate to SIGKILL for any surviving leader or descendant in the group.
+    with suppress(ProcessLookupError, PermissionError):
+        os.killpg(pgid, signal.SIGKILL)
+    if child.poll() is None:
+        with suppress(subprocess.TimeoutExpired):
+            child.wait(timeout=5)
+
+
+def _run(
+    provider: str,
+    allow_credentials: bool,
+    timeout: int,
+    *,
+    children_lock: threading.Lock | None = None,
+    active_children: set[subprocess.Popen[bytes]] | None = None,
+    is_closed: Callable[[], bool] | None = None,
+) -> dict[str, object]:
     args = [
         sys.executable,
         "-m",
@@ -36,12 +77,43 @@ def _run(provider: str, allow_credentials: bool, timeout: int) -> dict[str, obje
     ]
     if allow_credentials:
         args.append("--allow-credential-mint")
-    completed = subprocess.run(
-        under_timeout(args, timeout), capture_output=True, check=False
-    )
+    if children_lock is not None:
+        with children_lock:
+            if is_closed is not None and is_closed():
+                return {
+                    "provider": provider,
+                    "action": "recovery_worker_failed",
+                    "exit_code": 143,
+                }
+            child = subprocess.Popen(
+                under_timeout(args, timeout),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            if active_children is not None:
+                active_children.add(child)
+    else:
+        child = subprocess.Popen(
+            under_timeout(args, timeout),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    try:
+        stdout_bytes, _stderr_bytes = child.communicate()
+        returncode = child.returncode
+    finally:
+        if children_lock is not None and active_children is not None:
+            with children_lock:
+                active_children.discard(child)
+        if child.poll() is None:
+            _terminate_child_group(child, grace=5.0)
     # Only the CLI's closed structured verdict is eligible for scheduler logs.
     try:
-        payload = json.loads(completed.stdout)
+        payload = json.loads(stdout_bytes)
         if not isinstance(payload, dict):
             raise ValueError("invalid outcome")
         from .session_keeper import KeeperResult
@@ -58,7 +130,7 @@ def _run(provider: str, allow_credentials: bool, timeout: int) -> dict[str, obje
         return {
             "provider": provider,
             "action": "recovery_worker_failed",
-            "exit_code": completed.returncode,
+            "exit_code": returncode,
         }
 
 
@@ -89,6 +161,9 @@ class RecoveryWatch:
         self.active: dict[str, Future[dict[str, object]]] = {}
         self._requests: dict[str, str] = {}
         self._cursor = 0
+        self._children_lock = threading.Lock()
+        self._active_children: set[subprocess.Popen[bytes]] = set()
+        self._closed = False
 
     def tick(self) -> list[dict[str, object]]:
         outcomes: list[dict[str, object]] = []
@@ -139,14 +214,30 @@ class RecoveryWatch:
                 and due > self.now()
             ):
                 continue
-            self.active[provider] = self.pool.submit(
-                self.runner, provider, self.allow_credentials, self.timeout
-            )
+            if self.runner is _run:
+                self.active[provider] = self.pool.submit(
+                    _run,
+                    provider,
+                    self.allow_credentials,
+                    self.timeout,
+                    children_lock=self._children_lock,
+                    active_children=self._active_children,
+                    is_closed=lambda: self._closed,
+                )
+            else:
+                self.active[provider] = self.pool.submit(
+                    self.runner, provider, self.allow_credentials, self.timeout
+                )
             self._requests[provider] = record.health.request_id
             self._cursor = (self.providers.index(provider) + 1) % len(self.providers)
         return outcomes
 
     def close(self) -> None:
+        with self._children_lock:
+            self._closed = True
+            children = list(self._active_children)
+        for child in children:
+            _terminate_child_group(child, grace=5.0, allow_exited_leader=True)
         self.pool.shutdown(wait=True, cancel_futures=True)
 
 

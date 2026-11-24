@@ -3,6 +3,37 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.1.6] - 2026-11-24
+
+### Fixed
+
+- Honor `NEWSCLIP_CHALLENGE_MODE` (`detect-only` by default) across direct CLI `auth login` and fallback session acquisition, including child display-launcher processes (#52).
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.1.5 and 2.1.4; saved sessions, connection controls and archive formats are unchanged.
+
+## [2.1.5] - 2026-11-24
+
+### Fixed
+
+- Pass the selected `--user` explicitly to maintenance-cycle and fallback login child processes and strip ambient `NEWSCLIP_USER` overrides.
+- Enforce active connection controls and verified session generation under the acquired profile lease for serving reads, warm-ups, authenticated browser search, and published-profile verification, and drain expected missing profile leases during disconnect.
+- Treat identity mismatch as terminal in native extraction across serving, archive re-extraction, and drift checks while preserving verified-session teaser-DOM promotion.
+- Preserve committed browser profiles if sign-in finalization fails after session replacement, and initialize sign-in cleanup state before browser setup.
+- Enforce a 16 MiB response size ceiling on HTTP fetches (via `curl_cffi` `content_callback`, preserving total timeouts and connection reuse) and atomic UTF-8 byte-bounded browser DOM captures.
+- Serialize SQLite archive initialization across processes, validate extraction assessment identity and canonical URL consistency, and stream raw snapshots during drift checks.
+- Reuse in-flight futures on timed-out federated search batches and terminate per-watcher recovery child process groups cleanly on shutdown.
+- Keep revision-fenced Disconnect available when a subscription needs sign-in, isolate damaged provider cards on Connections, validate actions per provider, serialize Start requests and return HTTP 429 on link quota limits, check link expiry before offering Continue, and offload Connections index/sharing reads and ops secret resolution off the ASGI event loop.
+- Separate subscription-access historical enrollment and grant bounds from the 100 active-user limit and validate serialized record sizes before writing.
+- Fail closed on unstructured non-zero ops CLI exits, map HTTP 400/413/422 responses to non-retryable usage errors in `NewsclipClient`, and reject remote mode on local-only guard and health CLI commands.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.1.4; saved sessions, connection controls and archive formats are unchanged.
+
 ## [2.1.4] - 2026-11-15
 
 ### Fixed
@@ -62,7 +93,7 @@ _Publishes the 2.1.0 changes, which the public mirror did not receive; the packa
 ### Upgrade
 
 - Action required: none for images. Source Compose builds must pass the product version and full source revision.
-- Rollback: compatible with 2.0.3; no state format changes.
+- Rollback: persisted timing, incident and provider-hold records written by 2.1.x use the new `packaged` / `unstamped_development` provenance enum values, which 2.0.3 does not recognize. Rollback within 2.1.x is compatible; rolling back to 2.0.3 requires clearing or archiving 2.1.x timing/incident/hold files that carry those provenance values.
 
 ## [2.0.3] - 2026-11-03
 

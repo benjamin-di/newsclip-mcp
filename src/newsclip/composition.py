@@ -50,6 +50,7 @@ from .errors import (
     OperatorActionRequiredError,
     PersistenceError,
     ProviderTransportError,
+    SessionRequiredError,
     UsageError,
 )
 from .extraction import TrafilaturaExtractor
@@ -65,6 +66,7 @@ from .models import (
     ProviderReadiness,
     RawFetch,
     SessionArtifact,
+    SessionStatus,
     SessionVerification,
 )
 from .network import ProviderNetworkPolicy
@@ -437,9 +439,32 @@ def _compose_service(
     # and SessionStore verification all draw from the same per-provider token
     # bucket, so no store traffic is unmetered.
     connection_controls = ConnectionControls(state_root)
+    session_store_holder: list[SessionStore] = []
 
     def authorize_session(artifact: SessionArtifact) -> None:
         connection_controls.require_active(artifact.provider, artifact.account_key)
+
+    def verify_serving_generation(
+        artifact: SessionArtifact, *, require_verified: bool = True
+    ) -> None:
+        connection_controls.require_active(artifact.provider, artifact.account_key)
+        if session_store_holder:
+            store = session_store_holder[0]
+            try:
+                stored = store._read_stored_session(
+                    store._state_path(artifact.provider, artifact.account_key),
+                    artifact.provider,
+                    artifact.account_key,
+                )
+            except Exception as error:
+                raise SessionRequiredError("connection_disconnected") from error
+            if (
+                stored is None
+                or stored.artifact is None
+                or stored.artifact.generation_id != artifact.generation_id
+                or (require_verified and stored.status is not SessionStatus.VERIFIED)
+            ):
+                raise SessionRequiredError("connection_disconnected")
 
     network = ProviderNetworkPolicy(
         http, authorize_session=authorize_session, budget_owner=network_budget_owner
@@ -452,6 +477,7 @@ def _compose_service(
             runtime=runtime,
             profile_resolver=profiles.path,
             authorize_session=authorize_session,
+            verify_serving_generation=verify_serving_generation,
             policies={key: specs[key].browser_retrieval for key in browser_providers},
             readiness_evaluators={
                 key: _browser_readiness_evaluator(browser_providers[key], extractor)
@@ -702,6 +728,7 @@ def _compose_service(
         diagnostic_trace=runtime_trace,
         profile_verifier=verify_profile,
     )
+    session_store_holder.append(sessions)
     archive = None
     if include_archive:
         archive = ArchiveStore(

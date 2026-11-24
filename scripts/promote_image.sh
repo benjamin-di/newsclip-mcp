@@ -10,7 +10,17 @@ release="$repository:$version"
 error_file="$(mktemp)"
 trap 'rm -f "$error_file"' EXIT
 manifest_digest() {
-    docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -er '.digest'
+    if command -v jq >/dev/null 2>&1; then
+        docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | jq -er '.digest'
+    else
+        docker buildx imagetools inspect "$1" --format '{{json .Manifest}}' | python3 -c '
+import json, sys
+value = json.load(sys.stdin).get("digest")
+if not isinstance(value, str) or not value:
+    sys.exit(1)
+print(value)
+'
+    fi
 }
 # Resolve the tested digest before touching any release ref.
 [ "$(manifest_digest "$repository@$digest")" = "$digest" ]

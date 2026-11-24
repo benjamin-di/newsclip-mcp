@@ -184,7 +184,9 @@ def sample_semantic_snapshot(
                 ),
             )
         page.wait_for_timeout(min(readiness.poll_seconds, remaining) * 1000)
-        content = page.content().encode("utf-8", "replace")
+        from .browser_retrieval import read_bounded_page_content
+
+        content = read_bounded_page_content(page)
 
 
 def await_semantic_snapshot(

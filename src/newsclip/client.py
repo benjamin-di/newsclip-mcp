@@ -74,6 +74,8 @@ class NewsclipClient:
             response = self._client.post(f"api/{operation}", json=payload)
             if response.status_code == 401:
                 raise UsageError("server rejected the token or user URL")
+            if response.status_code in {400, 413, 422}:
+                raise UsageError("Newsclip server rejected the request")
             if response.status_code >= 400:
                 raise ProviderTransportError("Newsclip server rejected the request")
             data = response.json()

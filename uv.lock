@@ -1204,7 +1204,7 @@ wheels = [
 
 [[package]]
 name = "newsclip"
-version = "2.1.4"
+version = "2.1.6"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

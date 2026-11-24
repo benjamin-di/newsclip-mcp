@@ -14,7 +14,8 @@ from newsclip.sessions import _SAFE_PROBE_FAILURE_REASONS
 
 
 def fresh(args, **kwargs):
-    return 0, {"provider": args[2], "action": "fresh", "overall_state": "healthy"}
+    provider = args[args.index("keep") + 1]
+    return 0, {"provider": provider, "action": "fresh", "overall_state": "healthy"}
 
 
 def test_failed_provider_does_not_skip_others_or_disclose_raw_output(tmp_path):
@@ -209,10 +210,15 @@ def test_cli_scopes_public_cycle_to_selected_user(tmp_path, monkeypatch):
     import newsclip.maintenance_cycle as module
 
     original = module.run_maintenance_cycle
+    seen_args = []
+
+    def recording_fresh(args, **kwargs):
+        seen_args.append(list(args))
+        return fresh(args, **kwargs)
 
     def run(providers, **kwargs):
         assert kwargs["root"] == tmp_path / "users" / "alice"
-        return original(providers, **kwargs, runner=fresh)
+        return original(providers, **kwargs, runner=recording_fresh)
 
     monkeypatch.setenv("NEWSCLIP_STATE_HOME", str(tmp_path))
     monkeypatch.setattr(module, "run_maintenance_cycle", run)
@@ -223,6 +229,7 @@ def test_cli_scopes_public_cycle_to_selected_user(tmp_path, monkeypatch):
     data = json.loads(result.output)
     assert data["schema_version"] == 1
     assert len(data["results"]) == 2
+    assert all(args[:2] == ["--user", "alice"] for args in seen_args)
     assert not (tmp_path / "maintenance-cycle.lock").exists()
 
 

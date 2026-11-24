@@ -248,15 +248,16 @@ def login(
         ),
     ),
     challenge_mode: Annotated[
-        ChallengeMode,
+        ChallengeMode | None,
         typer.Option(
             "--challenge-mode",
             help=(
                 "'auto' runs bounded provider challenge handling; 'detect-only' "
-                "stops for operator action."
+                "stops for operator action. Defaults to NEWSCLIP_CHALLENGE_MODE "
+                "(or 'detect-only' when unset)."
             ),
         ),
-    ] = ChallengeMode.AUTO,
+    ] = None,
     import_cookies: Annotated[
         Path | None,
         typer.Option(
@@ -307,11 +308,12 @@ def login(
         def prepare_browser() -> None:
             _prepare_virtual_display(sys.argv, child_owns_invocation=True)
 
+        effective_mode = _login_challenge_mode(challenge_mode)
         return service.login(
             provider,
             headless=headless,
             cookie_payload=payload,
-            challenge_mode=challenge_mode,
+            challenge_mode=effective_mode,
             before_browser=(prepare_browser if headless else None),
         )
 
@@ -573,8 +575,13 @@ def health(
     only: no provider is contacted and no session is touched.
     """
 
+    def action():
+        if _remote_client() is not None:
+            raise UsageError("run health locally on the server")
+        return collect_fleet_health()
+
     _execute(
-        collect_fleet_health,
+        action,
         json_output=json_output,
         human_renderer=_render_fleet_health,
     )
@@ -655,6 +662,8 @@ def provider_guard(
     completed: list[GuardResult] = []
 
     def action() -> GuardResult:
+        if _remote_client() is not None:
+            raise UsageError("run provider-guard locally on the server")
         try:
             guard = build_provider_guard()
         except Exception as error:
@@ -748,6 +757,8 @@ def provider_guard_acknowledge(
     completed: list[AcknowledgementReport] = []
 
     def action() -> AcknowledgementReport:
+        if _remote_client() is not None:
+            raise UsageError("run provider-guard-acknowledge locally on the server")
         try:
             guard = build_provider_guard()
         except Exception as error:
@@ -2232,23 +2243,47 @@ def _execute[ResultT](
         )
 
 
+def _login_challenge_mode(explicit: ChallengeMode | None = None) -> ChallengeMode:
+    """Resolve effective login challenge mode, honoring NEWSCLIP_CHALLENGE_MODE."""
+    from .composition import _read_path_challenge_mode
+
+    configured = _read_path_challenge_mode()
+    if explicit is None:
+        return configured
+    if (
+        os.environ.get("NEWSCLIP_CHALLENGE_MODE") is not None
+        and configured is ChallengeMode.DETECT_ONLY
+    ):
+        return ChallengeMode.DETECT_ONLY
+    return explicit
+
+
 def _session_acquirer(
     service: Service,
     *,
     json_output: bool,
 ) -> Callable[[str], None]:
     def acquire(provider: str) -> None:
+        effective_mode = _login_challenge_mode()
+
         def prepare_browser() -> None:
-            scoped_argv = [
-                sys.argv[0],
-                "auth",
-                "login",
-                provider,
-                "--headless",
-                "--challenge-mode",
-                ChallengeMode.AUTO.value,
-                "--quiet",
-            ]
+            from .tenancy import current_user
+
+            selected_user = current_user()
+            scoped_argv = [sys.argv[0]]
+            if selected_user is not None:
+                scoped_argv.extend(["--user", selected_user])
+            scoped_argv.extend(
+                [
+                    "auth",
+                    "login",
+                    provider,
+                    "--headless",
+                    "--challenge-mode",
+                    effective_mode.value,
+                    "--quiet",
+                ]
+            )
             if json_output:
                 scoped_argv.append("--json")
             _prepare_virtual_display(
@@ -2259,7 +2294,7 @@ def _session_acquirer(
         service.login(
             provider,
             headless=True,
-            challenge_mode=ChallengeMode.AUTO,
+            challenge_mode=effective_mode,
             before_browser=prepare_browser,
         )
 

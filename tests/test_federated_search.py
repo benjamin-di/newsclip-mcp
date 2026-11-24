@@ -456,8 +456,8 @@ def test_pager_reports_a_straggler_as_timeout_without_waiting_for_it(
     )
     assert envelope is not None and envelope.retryable is True
 
-    # The abandoned worker finishes after the response; its page is never
-    # applied, so the next batch requests the same first page afresh.
+    # The in-flight worker finishes after the first batch timed out; the next
+    # batch collects that single in-flight result without duplicating the fetch.
     assert slow.finished.wait(timeout=5)
     second = pager.next_batch(5)
 
@@ -468,7 +468,7 @@ def test_pager_reports_a_straggler_as_timeout_without_waiting_for_it(
     ]
     assert [source.result_count for source in second.sources] == [1, 1]
     assert second.has_more is False
-    assert slow.calls == 2
+    assert slow.calls == 1
 
 
 def test_every_source_straggling_is_an_aggregate_timeout(

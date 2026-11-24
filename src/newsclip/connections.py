@@ -6,6 +6,7 @@ import html
 import json
 import os
 import stat
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +17,7 @@ from signin_window.connections import disconnect_confirmation, timestamp
 from signin_window.connections import page as connection_page
 from signin_window.oidc import BrowserAuth, OIDCConfig
 from signin_window.page import PageText
-from signin_window.relay import AttemptContext, Link, Relay
+from signin_window.relay import AttemptContext, Link, LinkLimited, Relay
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
@@ -125,6 +126,16 @@ class Connections:
         self.home = urlsplit(config.oidc.public_url).path.rstrip("/") + "/connections/"
         self.relays, self.adapters, self.controls, self.links = {}, {}, {}, {}
         self.access: SubscriptionAccess | None = None
+        self._start_locks: dict[tuple[str, str], threading.Lock] = {}
+        self._start_locks_guard = threading.Lock()
+
+    def _start_lock(self, user: str, provider: str) -> threading.Lock:
+        with self._start_locks_guard:
+            lock = self._start_locks.get((user, provider))
+            if lock is None:
+                lock = threading.Lock()
+                self._start_locks[(user, provider)] = lock
+            return lock
 
     def user(self, request):
         identity = self.auth.identity(request)
@@ -235,20 +246,30 @@ class Connections:
         selected = self.adapters[user]._service_ready()._registry.get(provider)
         if selected.login_recipe is None:
             raise UsageError("this provider does not require sign-in")
-        revision = self.controls[user].begin(provider)
-        link = self.relays[user].create(
-            provider,
-            params={
-                "user": user,
-                "provider": provider,
-                "account_key": "default",
-                "connection_revision": revision,
-            },
-            label=_PUBLISHER_NAMES.get(provider, provider),
-            context=AttemptContext(owner=user, target=revision),
-        )
-        self.links[user, provider] = link
-        return link
+        with self._start_lock(user, provider):
+            # Verify controls are readable before retiring any working relay link.
+            self.controls[user].status(provider)
+            link = self.relays[user].create(
+                provider,
+                params={
+                    "user": user,
+                    "provider": provider,
+                    "account_key": "default",
+                    "connection_revision": "",
+                },
+                label=_PUBLISHER_NAMES.get(provider, provider),
+                context=AttemptContext(owner=user, target=""),
+            )
+            try:
+                revision = self.controls[user].begin(provider)
+            except Exception:
+                link.closed = True
+                self.relays[user].cancel(link)
+                raise
+            link.params["connection_revision"] = revision
+            link.context = AttemptContext(owner=user, target=revision)
+            self.links[user, provider] = link
+            return link
 
     def request(self, user, provider):
         """Requesting an owner page never pauses or supersedes a connection."""
@@ -275,22 +296,42 @@ class Connections:
             if selected.login_recipe is None:
                 continue
             provider = selected.key
-            control = self.controls[user].status(provider)
-            link = self.links.get((user, provider))
-            health = store.status(provider) if store else None
-            if control["phase"] == 2:
-                state, detail = (
-                    "disconnecting",
-                    "Access stopped. Finish disconnecting to remove the saved sign-in.",
+            try:
+                control = self.controls[user].status(provider)
+                link = self.links.get((user, provider))
+                health = store.status(provider) if store else None
+            except (NewsclipError, OSError, ValueError):
+                items.append(
+                    {
+                        "provider": provider,
+                        "name": _PUBLISHER_NAMES.get(provider, provider),
+                        "revision": None,
+                        "state": "unavailable",
+                        "detail": (
+                            "Connection state is unavailable. "
+                            "Ask your administrator to recover this record."
+                        ),
+                        "last_verified": None,
+                        "url": None,
+                    }
                 )
-            elif (
+                continue
+            link_live = bool(
                 link
+                and not link.closed
+                and link.expires > self.clock()
                 and link.context
                 and self.controls[user].current(
                     provider, "default", link.context.target
                 )
                 and link.state in ("ready", "starting", "waiting", "saving")
-            ):
+            )
+            if control["phase"] == 2:
+                state, detail = (
+                    "disconnecting",
+                    "Access stopped. Finish disconnecting to remove the saved sign-in.",
+                )
+            elif link_live:
                 state, detail = (
                     "connecting",
                     "Sign-in is in progress. Continue the sign-in you already started.",
@@ -326,7 +367,7 @@ class Connections:
                     "last_verified": health.last_verified_at.isoformat()
                     if health and health.last_verified_at
                     else None,
-                    "url": link.url if state == "connecting" else None,
+                    "url": link.url if state == "connecting" and link else None,
                 }
             )
         return items
@@ -388,18 +429,41 @@ class Connections:
                 ),
                 status_code=403,
             )
-        statuses = self.statuses(user)
+
+        def load_index():
+            loaded_statuses = self.statuses(user)
+            sharing_snapshots = None
+            sharing_members = None
+            sharing_failed = False
+            if self.access is not None:
+                try:
+                    sharing_snapshots, sharing_members = self.access.view_all(
+                        user, [item["provider"] for item in loaded_statuses]
+                    )
+                except (NewsclipError, OSError, ValueError):
+                    sharing_failed = True
+            return loaded_statuses, sharing_snapshots, sharing_members, sharing_failed
+
+        (
+            statuses,
+            sharing_snapshots,
+            sharing_members,
+            sharing_failed,
+        ) = await self.adapters[user].dispatcher.run(load_index)
         body = "<p>Signed in as " + html.escape(identity["name"]) + ".</p>"
         for status in statuses:
             provider, state = status["provider"], status["state"]
+            role = "alert" if state == "unavailable" else "status"
             body += (
                 f'<article id="{html.escape(provider)}">'
                 f"<h2>{html.escape(status['name'])}</h2>"
-                f"<p role=status>{html.escape(status['detail'])}</p>"
+                f"<p role={role}>{html.escape(status['detail'])}</p>"
             )
             if status["last_verified"]:
                 body += timestamp(status["last_verified"])
-            if state == "connecting":
+            if state == "unavailable":
+                pass
+            elif state == "connecting":
                 body += f'<a href="{html.escape(status["url"])}">Continue sign-in</a>'
                 body += self.form(
                     "cancel", provider, "Cancel sign-in", revision=status["revision"]
@@ -422,7 +486,7 @@ class Connections:
                     provider,
                     "Reconnect" if state == "connected" else "Connect",
                 )
-                if state == "connected":
+                if state in ("connected", "needs_signin") and status["revision"]:
                     body += self.form(
                         "disconnect",
                         provider,
@@ -430,14 +494,31 @@ class Connections:
                         revision=status["revision"],
                     )
             if self.access is not None:
-                try:
-                    body += self.sharing_body(user, provider, status)
-                except (NewsclipError, OSError, ValueError):
+                if (
+                    sharing_failed
+                    or sharing_snapshots is None
+                    or provider not in sharing_snapshots
+                ):
                     body += (
                         '<p role="alert">Sharing controls are unavailable. '
                         "Ask the administrator to recover this record. "
                         "Your own connection controls above remain available.</p>"
                     )
+                else:
+                    try:
+                        body += self.sharing_body(
+                            user,
+                            provider,
+                            status,
+                            snapshot=sharing_snapshots[provider],
+                            members=sharing_members,
+                        )
+                    except (NewsclipError, OSError, ValueError):
+                        body += (
+                            '<p role="alert">Sharing controls are unavailable. '
+                            "Ask the administrator to recover this record. "
+                            "Your own connection controls above remain available.</p>"
+                        )
             body += "</article>"
         body += (
             "<p class=muted>Connecting a subscription does not give an assistant "
@@ -455,9 +536,13 @@ class Connections:
             ),
         )
 
-    def sharing_body(self, user, provider, status):
+    def sharing_body(self, user, provider, status, *, snapshot=None, members=None):
         assert self.access is not None
-        row, offered, unavailable = self.access.view(user, provider)
+        if snapshot is not None:
+            row, offered, unavailable, admitted_ok = snapshot
+        else:
+            row, offered, unavailable = self.access.view(user, provider)
+            admitted_ok = None
         selected = row["selection"]
         summary = (
             "Using my subscription."
@@ -467,12 +552,18 @@ class Connections:
             else "No subscription selected. Choose below to continue."
         )
         if selected and selected["owner"] != user:
-            try:
-                self.access.admit(user, provider)
-            except NewsclipError:
+            if admitted_ok is False:
                 summary = (
                     "The selected shared access was removed or changed. Choose below."
                 )
+            elif admitted_ok is None:
+                try:
+                    self.access.admit(user, provider)
+                except NewsclipError:
+                    summary = (
+                        "The selected shared access was removed or changed. "
+                        "Choose below."
+                    )
         choices = []
         if not selected or selected["owner"] != user:
             choices.append(
@@ -525,7 +616,8 @@ class Connections:
             "reconnect, disconnect or share it further. Activity may appear in the "
             "publisher account. Stopping sharing keeps articles they already saved.</p>"
         )
-        members = self.access.users() - {user}
+        if members is None:
+            members = self.access.users() - {user}
         for member in sorted(members | row["grants"].keys()):
             grant = row["grants"].get(member)
             body += "<p>" + html.escape(member) + "</p>"
@@ -643,11 +735,12 @@ class Connections:
 
     async def status(self, request):
         user = self.user(request)
-        return (
-            JSONResponse({"providers": self.statuses(user)})
-            if user
-            else Response(status_code=401)
+        if not user:
+            return Response(status_code=401)
+        providers = await self.adapters[user].dispatcher.run(
+            lambda: self.statuses(user)
         )
+        return JSONResponse({"providers": providers})
 
     async def action(self, request):
         user = self.user(request)
@@ -670,9 +763,10 @@ class Connections:
             ):
                 raise ValueError("provider")
             provider = values["provider"][0]
-            if provider not in {item["provider"] for item in self.statuses(user)}:
+            selected = self.adapters[user]._service_ready()._registry.get(provider)
+            if selected.login_recipe is None:
                 raise ValueError("provider")
-        except (ValueError, UnicodeError):
+        except (ValueError, UnicodeError, NewsclipError):
             return Response(status_code=400)
         action = request.url.path.rsplit("/", 1)[1]
         if action == "disconnect" and (
@@ -716,13 +810,22 @@ class Connections:
                     )
 
                 await adapter.dispatcher.run(disconnect)
+        except LinkLimited:
+            return HTMLResponse(
+                self.page(
+                    '<p role="alert">Too many sign-in attempts for this subscription. '
+                    "Wait a while and try again.</p>"
+                    f'<a href="{self.home}">Back to Connections</a>'
+                ),
+                status_code=429,
+            )
         except (NewsclipError, OSError):
             return HTMLResponse(
                 self.page(
-                    "<p>The operation could not finish. A pending disconnect "
-                    "stays blocked. "
-                    "Return to connections and retry.</p>"
-                    f'<a href="{self.home}">Back to connections</a>'
+                    '<p role="alert">The operation could not finish. '
+                    "A pending disconnect stays blocked. "
+                    "Return to Connections and retry.</p>"
+                    f'<a href="{self.home}">Back to Connections</a>'
                 ),
                 status_code=409,
             )

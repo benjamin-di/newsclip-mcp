@@ -151,21 +151,18 @@ def capture_verification_fetch(
         if media_type not in _HTML_MEDIA_TYPES:
             raise ProviderTransportError("browser verification response is not HTML")
     try:
+        from .browser_retrieval import read_bounded_page_content
+
         content = getattr(page, "content", None)
-    except Exception as error:
-        raise ProviderTransportError(
-            "browser verification content is unavailable"
-        ) from error
-    if not callable(content):
-        raise ProviderTransportError("browser verification content is unavailable")
-    try:
-        html = content()
+        if not callable(content) and not callable(getattr(page, "evaluate", None)):
+            raise ProviderTransportError("browser verification content is unavailable")
+        raw_html = read_bounded_page_content(page)
+    except ProviderTransportError:
+        raise
     except Exception as error:
         raise ProviderTransportError(
             "browser verification content capture failed"
         ) from error
-    if not isinstance(html, str):
-        raise ProviderTransportError("browser verification content is invalid")
     final_page_url = _page_url(page)
     if not _same_document(observed.response_url, final_page_url):
         raise ProviderTransportError("browser verification document changed")
@@ -173,7 +170,7 @@ def capture_verification_fetch(
         requested_url,
         observed,
         document_url=final_page_url,
-        raw_html=html.encode("utf-8", "replace"),
+        raw_html=raw_html,
         retrieved_at=retrieved_at,
         session_cookie_present=session_cookie_present,
     )
