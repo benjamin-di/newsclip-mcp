@@ -3,6 +3,18 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.1.7] - 2026-11-24
+
+### Changed
+
+- Upgrade `signin-window` from 0.8.4 to 0.10.0 for mobile/desktop remote viewer improvements (scrollable noVNC container, Restart button, passkey notice, keyboard/paste/zoom ergonomics, and non-blocking sign-in completion handoff).
+- Show the active view layout (`mobile view` / `desktop view`) on `/connections/` and offer `Start new sign-in` alongside `Continue sign-in`, with fenced replacement teardown, saving-state protection, and `429` active-window preservation.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.1.6; `signin-window` 0.10.0 adds `revocations` and `session_families` tables to the OIDC `connections-browser` SQLite store while preserving `sessions`, publisher controls, and saved session records (`make rollback-check`).
+
 ## [2.1.6] - 2026-11-24
 
 ### Fixed

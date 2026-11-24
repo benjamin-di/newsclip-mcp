@@ -80,9 +80,12 @@ def test_product_composition_isolates_complete_state(monkeypatch, tmp_path):
 class Backend:
     def __init__(self):
         self.starts = []
+        self.closed = []
+        self.window_state = "waiting"
 
     def start(self, layout="desktop", **params):
         self.starts.append(params)
+        self.window_state = "waiting"
         return {
             "id": "synthetic-window-id-123",
             "state": "waiting",
@@ -90,10 +93,12 @@ class Backend:
         }
 
     def state(self, _identifier):
-        return {"id": "synthetic-window-id-123", "state": "waiting"}
+        return {"id": "synthetic-window-id-123", "state": self.window_state}
 
-    def close(self, _identifier):
-        pass
+    def close(self, identifier, *, cancel_only=False):
+        self.closed.append(identifier)
+        if not cancel_only or self.window_state in ("starting", "waiting"):
+            self.window_state = "cancelled"
 
 
 class ConnectProvider(PagedFakeProvider):

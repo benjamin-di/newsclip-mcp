@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import collections
 import html
 import json
 import os
+import secrets
 import stat
 import threading
 import time
@@ -42,6 +44,96 @@ _PUBLISHER_NAMES = {
     "reuters": "Reuters",
     "cnbc": "CNBC",
 }
+
+
+class _ReservedRelay(Relay):
+    """Relay with binding pre-teardown slot reservation so 429 keeps live windows."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._lock = threading.RLock()
+        self._reserved_slots = 0
+
+    def reserve_slot(self, key: str) -> bool:
+        now = self._clock()
+        with self._lock:
+            made = self._made.setdefault(key, collections.deque())
+            while made and now - made[0] > 3600:
+                made.popleft()
+            if len(made) >= self.links_per_hour:
+                return False
+            self._expire(now)
+            if len(self._retired) + self._reserved_slots >= self.max_links:
+                return False
+            self._reserved_slots += 1
+            return True
+
+    def release_slot(self) -> None:
+        with self._lock:
+            if self._reserved_slots > 0:
+                self._reserved_slots -= 1
+
+    def create(
+        self,
+        key: str,
+        *,
+        params: dict | None = None,
+        label: str | None = None,
+        context: AttemptContext | None = None,
+        reserved: bool = False,
+    ) -> Link:
+        if self._authorize is not None and (context is None or not context.owner):
+            raise ValueError("authenticated links require a host-assigned owner")
+        to_retire: list[Link] = []
+        with self._lock:
+            if reserved and self._reserved_slots > 0:
+                self._reserved_slots -= 1
+            now = self._clock()
+            made = self._made.setdefault(key, collections.deque())
+            while made and now - made[0] > 3600:
+                made.popleft()
+            if len(made) >= self.links_per_hour:
+                raise LinkLimited(key)
+            self._expire(now)
+            if (
+                not reserved
+                and len(self._retired) + self._reserved_slots >= self.max_links
+            ):
+                raise LinkLimited(key)
+            made.append(now)
+            for old in [item for item in self._links.values() if item.key == key]:
+                self._links.pop(old.id, None)
+                old.closed = True
+                old.view_token = None
+                if old.window_id is not None:
+                    self._track_retired_locked(old)
+                    if old.state != "saving":
+                        to_retire.append(old)
+            while len(self._links) >= self.max_links:
+                oldest = self._links.pop(
+                    min(self._links.values(), key=lambda item: item.created).id
+                )
+                oldest.closed = True
+                oldest.view_token = None
+                if oldest.window_id is not None:
+                    self._track_retired_locked(oldest)
+                    if oldest.state != "saving":
+                        to_retire.append(oldest)
+            link_id = secrets.token_urlsafe(24)
+            link = Link(
+                link_id,
+                key,
+                now,
+                now + self.link_ttl,
+                f"{self.public_url}/{link_id}",
+                dict(params or {}),
+                key if label is None else label,
+            )
+            link.context = context
+            self._links[link.id] = link
+        for old in to_retire:
+            threading.Thread(target=self._retire, args=(old,), daemon=True).start()
+        return link
 
 
 @dataclass(frozen=True)
@@ -128,6 +220,86 @@ class Connections:
         self.access: SubscriptionAccess | None = None
         self._start_locks: dict[tuple[str, str], threading.Lock] = {}
         self._start_locks_guard = threading.Lock()
+        self._pending_close: dict[tuple[str, str], list[Link]] = {}
+        self._known_links: dict[tuple[str, str], dict[str, Link]] = {}
+        self._draining: set[tuple[str, str]] = set()
+
+    @staticmethod
+    def _link_still_open(link: Link) -> bool:
+        with link.lock:
+            return (
+                link.window_id is not None
+                or link.closing
+                or link.state in ("starting", "waiting", "saving")
+            )
+
+    @staticmethod
+    def _is_already_completed_idle(link: Link) -> bool:
+        if not link.lock.acquire(blocking=False):
+            return False
+        try:
+            return (
+                link.window_id is None
+                and not link.closing
+                and link.state == "connected"
+            )
+        finally:
+            link.lock.release()
+
+    def _cancel_and_check(self, user: str, link: Link) -> tuple[bool, bool]:
+        self.relays[user].cancel(link)
+        with link.lock:
+            still_open = (
+                link.window_id is not None
+                or link.closing
+                or link.state in ("starting", "waiting", "saving")
+            )
+            completed = link.state == "connected"
+            return still_open, completed
+
+    def _snapshot_links(
+        self, user: str, provider: str
+    ) -> tuple[list[Link], set[str], set[str]]:
+        relay = self.relays[user]
+        seen: dict[str, Link] = {}
+        known = self._known_links.get((user, provider))
+        if known:
+            for link_id, link in list(known.items()):
+                if link.key == provider:
+                    seen[link_id] = link
+        for link in relay.links(provider):
+            if link.key == provider:
+                seen[link.id] = link
+        with relay._lock:
+            for link in relay._retired.values():
+                if link.key == provider:
+                    seen[link.id] = link
+            active_relay_ids = {
+                link_id
+                for link_id, link in relay._links.items()
+                if link.key == provider
+            }
+            live_ids = set(relay._links) | set(relay._retired)
+        already_completed: set[str] = set()
+        for link_id, link in list(seen.items()):
+            if link.lock.acquire(blocking=False):
+                try:
+                    still_open = (
+                        link.window_id is not None
+                        or link.closing
+                        or link.state in ("starting", "waiting", "saving")
+                    )
+                    if not still_open and link.state == "connected":
+                        already_completed.add(link_id)
+                finally:
+                    link.lock.release()
+                if known and link_id not in live_ids and not still_open:
+                    known.pop(link_id, None)
+        return list(seen.values()), already_completed, active_relay_ids
+
+    def _provider_links(self, user: str, provider: str) -> list[Link]:
+        links, _, _ = self._snapshot_links(user, provider)
+        return links
 
     def _start_lock(self, user: str, provider: str) -> threading.Lock:
         with self._start_locks_guard:
@@ -166,6 +338,8 @@ class Connections:
                 self.user(request) == user.id
                 and link.context
                 and link.context.owner == user.id
+                and not link.closed
+                and (user.id, link.key) not in self._draining
                 and controls.current(link.key, "default", link.context.target)
             )
 
@@ -184,15 +358,20 @@ class Connections:
                 controls.cancel(link.key, "default", link.context.target)
             return "cancelled" if result.get("state") == "cancelled" else "failed"
 
-        relay = Relay(
+        relay = _ReservedRelay(
             backend,
             f"{origin}/users/{user.id}/connect",
             text=PageText(
                 service="Newsclip",
                 title="Connect {label} to Newsclip",
+                notice=(
+                    "Use your password or email code — device passkeys aren't "
+                    "available in this remote window."
+                ),
                 help_html=(
-                    "Sign in on {label}'s own page below. Use a password or code; "
-                    "device passkeys do not work in this remote window. Pasting works."
+                    "Sign in on {label}'s own page below, using your password or "
+                    "email code. On a phone or tablet, tap Paste, Keyboard, or Zoom "
+                    "in the toolbar above; on a desktop, paste with Ctrl+V or Cmd+V."
                 ),
                 intro_html=(
                     "This connects your <b>{label}</b> subscription to Newsclip. "
@@ -227,11 +406,38 @@ class Connections:
                 and self.user(request) == user
                 and link.context
                 and link.context.owner == user
+                and not link.closed
+                and (user, link.key) not in self._draining
                 and self.controls[user].current(
                     link.key, "default", link.context.target
                 )
             ):
                 return Response(status_code=404)
+            for_restart = False
+            content_type = (
+                (request.headers.get("content-type") or "")
+                .split(";")[0]
+                .strip()
+                .lower()
+            )
+            if content_type == "application/json":
+                try:
+                    payload = await request.json()
+                except ValueError:
+                    payload = {}
+                for_restart = isinstance(payload, dict) and bool(
+                    payload.get("for_restart")
+                )
+            if for_restart:
+                await self.adapters[user].dispatcher.run(
+                    lambda: relay.cancel(link, for_restart=True)
+                )
+                data = link.public()
+                if link.state in ("starting", "waiting"):
+                    data["can_restart"] = link.starts < relay.max_starts
+                    if link.viewer_revoked:
+                        data["closing"] = True
+                return JSONResponse(data, headers={"Cache-Control": "no-store"})
             self.controls[user].cancel(link.key, "default", link.context.target)
             await self.adapters[user].dispatcher.run(lambda: relay.cancel(link))
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
@@ -242,34 +448,192 @@ class Connections:
             if getattr(route, "path", "") != prefix + "/{id}/cancel"
         ] + [Route(prefix + "/{id}/cancel", cancel, methods=["POST"])]
 
-    def connection(self, user, provider):
+    def connection(self, user, provider, *, replace=None):
         selected = self.adapters[user]._service_ready()._registry.get(provider)
         if selected.login_recipe is None:
             raise UsageError("this provider does not require sign-in")
         with self._start_lock(user, provider):
+            still_open: list[Link] = []
+            pending_completed = False
+            for held in self._pending_close.get((user, provider), ()):
+                open_now, done_now = self._cancel_and_check(user, held)
+                if open_now:
+                    still_open.append(held)
+                if done_now:
+                    pending_completed = True
+            if still_open:
+                self._pending_close[user, provider] = still_open
+                raise UsageError(
+                    "The previous sign-in window is still closing. "
+                    "Wait a moment and try again."
+                )
+            self._pending_close.pop((user, provider), None)
+            if pending_completed:
+                raise UsageError(
+                    "Your previous sign-in just completed. "
+                    "Return to Connections to check its status."
+                )
             # Verify controls are readable before retiring any working relay link.
-            self.controls[user].status(provider)
-            link = self.relays[user].create(
-                provider,
-                params={
-                    "user": user,
-                    "provider": provider,
-                    "account_key": "default",
-                    "connection_revision": "",
-                },
-                label=_PUBLISHER_NAMES.get(provider, provider),
-                context=AttemptContext(owner=user, target=""),
-            )
+            current = self.controls[user].status(provider)
+            if current["phase"] == 2:
+                raise UsageError("Finish disconnecting before starting a new sign-in.")
+            slot_reserved = False
+            link: Link | None = None
+            committed = False
+            draining_entered = False
             try:
+                now = self.clock()
+                current_link = self.links.get((user, provider))
+                if replace is not None:
+                    with self.relays[user]._lock:
+                        pre_target = self.relays[user]._links.get(replace)
+                    if (
+                        pre_target is None
+                        or current_link is None
+                        or current_link.id != replace
+                        or pre_target.key != provider
+                        or pre_target.closed
+                        or pre_target.expires <= now
+                        or pre_target.context is None
+                        or not self.controls[user].current(
+                            provider, "default", pre_target.context.target
+                        )
+                        or pre_target.state
+                        not in ("ready", "starting", "waiting", "cancelled")
+                    ):
+                        raise UsageError(
+                            "This sign-in attempt is no longer active. "
+                            "Return to Connections to check its status."
+                        )
+                else:
+                    with self.relays[user]._lock:
+                        live_links = [
+                            item
+                            for item in self.relays[user]._links.values()
+                            if item.key == provider
+                        ]
+                    if any(
+                        not item.closed
+                        and item.expires > now
+                        and item.context is not None
+                        and self.controls[user].current(
+                            provider, "default", item.context.target
+                        )
+                        and item.state
+                        in ("ready", "starting", "waiting", "saving", "cancelled")
+                        for item in live_links
+                    ):
+                        raise UsageError(
+                            "A sign-in attempt is already open. "
+                            "Return to Connections to continue or replace it."
+                        )
+                if not self.relays[user].reserve_slot(provider):
+                    raise LinkLimited(provider)
+                slot_reserved = True
+                self._draining.add((user, provider))
+                draining_entered = True
+                previous, already_completed, active_relay_ids = self._snapshot_links(
+                    user, provider
+                )
+                now = self.clock()
+
+                def is_active_attempt(item: Link) -> bool:
+                    return (
+                        item.id in active_relay_ids
+                        and not item.closed
+                        and item.expires > now
+                        and item.id not in already_completed
+                        and item.context is not None
+                        and self.controls[user].current(
+                            provider, "default", item.context.target
+                        )
+                        and item.state
+                        in ("ready", "starting", "waiting", "saving", "cancelled")
+                    )
+
+                if replace is not None:
+                    target_link = next(
+                        (old for old in previous if old.id == replace), None
+                    )
+                    if (
+                        target_link is None
+                        or current_link is None
+                        or current_link.id != replace
+                        or target_link.id not in active_relay_ids
+                        or target_link.closed
+                        or target_link.expires <= now
+                        or target_link.id in already_completed
+                        or target_link.context is None
+                        or not self.controls[user].current(
+                            provider, "default", target_link.context.target
+                        )
+                        or target_link.state
+                        not in ("ready", "starting", "waiting", "cancelled")
+                    ):
+                        raise UsageError(
+                            "This sign-in attempt is no longer active. "
+                            "Return to Connections to check its status."
+                        )
+                    already_completed.discard(replace)
+                elif any(is_active_attempt(old) for old in previous):
+                    raise UsageError(
+                        "A sign-in attempt is already open. "
+                        "Return to Connections to continue or replace it."
+                    )
+                if any(old.state == "saving" for old in previous):
+                    raise UsageError(
+                        "A previous sign-in is still finishing. "
+                        "Wait a moment and try again."
+                    )
+                for old in previous:
+                    old.closed = True
+                completed = False
+                for old in previous:
+                    open_now, done_now = self._cancel_and_check(user, old)
+                    if open_now:
+                        still_open.append(old)
+                    if done_now and old.id not in already_completed:
+                        completed = True
+                if still_open:
+                    self._pending_close[user, provider] = still_open
+                    raise UsageError(
+                        "The previous sign-in window is still closing. "
+                        "Wait a moment and try again."
+                    )
+                if completed:
+                    raise UsageError(
+                        "Your previous sign-in just completed. "
+                        "Return to Connections to check its status."
+                    )
+                slot_reserved = False
+                link = self.relays[user].create(
+                    provider,
+                    params={
+                        "user": user,
+                        "provider": provider,
+                        "account_key": "default",
+                        "connection_revision": "",
+                    },
+                    label=_PUBLISHER_NAMES.get(provider, provider),
+                    context=AttemptContext(owner=user, target=""),
+                    reserved=True,
+                )
+                self._known_links.setdefault((user, provider), {})[link.id] = link
                 revision = self.controls[user].begin(provider)
-            except Exception:
-                link.closed = True
-                self.relays[user].cancel(link)
-                raise
-            link.params["connection_revision"] = revision
-            link.context = AttemptContext(owner=user, target=revision)
-            self.links[user, provider] = link
-            return link
+                link.params["connection_revision"] = revision
+                link.context = AttemptContext(owner=user, target=revision)
+                self.links[user, provider] = link
+                committed = True
+                return link
+            finally:
+                if slot_reserved:
+                    self.relays[user].release_slot()
+                if link is not None and not committed:
+                    link.closed = True
+                    if (user, provider) in self._known_links:
+                        self._known_links[user, provider].pop(link.id, None)
+                if draining_entered:
+                    self._draining.discard((user, provider))
 
     def request(self, user, provider):
         """Requesting an owner page never pauses or supersedes a connection."""
@@ -283,7 +647,7 @@ class Connections:
         store = source._store if isinstance(source, ServingSessions) else source
         return store if isinstance(store, SessionStore) else None
 
-    def statuses(self, user):
+    def statuses(self, user, *, include_replace: bool = False):
         service = self.adapters[user]._service_ready()
         store = self._store(user)
         if (
@@ -317,24 +681,40 @@ class Connections:
                 )
                 continue
             link_live = bool(
-                link
+                (user, provider) not in self._draining
+                and link
                 and not link.closed
                 and link.expires > self.clock()
                 and link.context
+                and link.context.target == control["revision"]
                 and self.controls[user].current(
                     provider, "default", link.context.target
                 )
                 and link.state in ("ready", "starting", "waiting", "saving")
             )
+            layout = getattr(link, "layout", "") if link_live and link else ""
             if control["phase"] == 2:
                 state, detail = (
                     "disconnecting",
                     "Access stopped. Finish disconnecting to remove the saved sign-in.",
                 )
+            elif link_live and link and link.state == "saving":
+                state, detail = (
+                    "saving",
+                    "Saving connection.",
+                )
             elif link_live:
+                view_note = (
+                    " (mobile view)"
+                    if layout == "phone"
+                    else " (desktop view)"
+                    if layout == "desktop"
+                    else ""
+                )
                 state, detail = (
                     "connecting",
-                    "Sign-in is in progress. Continue the sign-in you already started.",
+                    f"Sign-in is in progress{view_note}. "
+                    "Continue the sign-in you already started.",
                 )
             elif control.get("human_until", 0) > self.clock():
                 state, detail = (
@@ -357,6 +737,23 @@ class Connections:
                     "needs_signin",
                     "Connect the subscription you want to use.",
                 )
+            rec_replace = None
+            if (
+                include_replace
+                and state == "recovering"
+                and link is not None
+                and not link.closed
+                and link.expires > self.clock()
+                and link.state == "cancelled"
+                and link.context is not None
+                and link.context.target == control["revision"]
+                and self.controls[user].current(
+                    provider, "default", link.context.target
+                )
+            ):
+                with self.relays[user]._lock:
+                    if link.id in self.relays[user]._links:
+                        rec_replace = link.id
             items.append(
                 {
                     "provider": provider,
@@ -368,6 +765,8 @@ class Connections:
                     if health and health.last_verified_at
                     else None,
                     "url": link.url if state == "connecting" and link else None,
+                    **({"layout": layout} if state in ("connecting", "saving") else {}),
+                    **({"_replace": rec_replace} if include_replace else {}),
                 }
             )
         return items
@@ -381,19 +780,23 @@ class Connections:
             **renderer_options(connection_page),
         )
 
-    def form(self, action, provider, text, *, revision=None):
+    def form(self, action, provider, text, *, revision=None, replace=None):
         fence = (
             f'<input type="hidden" name="revision" value="{html.escape(revision)}">'
             if action in ("cancel", "disconnect")
             else ""
         )
+        if replace is not None and action == "start":
+            fence += (
+                f'<input type="hidden" name="replace" value="{html.escape(replace)}">'
+            )
         kind = (
             "danger"
             if action == "disconnect"
             else "quiet"
             if action == "cancel"
             else "secondary"
-            if text == "Reconnect"
+            if text in ("Reconnect", "Start new sign-in")
             else "primary"
         )
         form = (
@@ -431,7 +834,7 @@ class Connections:
             )
 
         def load_index():
-            loaded_statuses = self.statuses(user)
+            loaded_statuses = self.statuses(user, include_replace=True)
             sharing_snapshots = None
             sharing_members = None
             sharing_failed = False
@@ -464,15 +867,31 @@ class Connections:
             if state == "unavailable":
                 pass
             elif state == "connecting":
-                body += f'<a href="{html.escape(status["url"])}">Continue sign-in</a>'
+                body += (
+                    f'<a class="button" href="{html.escape(status["url"])}">'
+                    "Continue sign-in</a>"
+                )
+                body += self.form(
+                    "start",
+                    provider,
+                    "Start new sign-in",
+                    replace=status["url"].rsplit("/", 1)[-1],
+                )
                 body += self.form(
                     "cancel", provider, "Cancel sign-in", revision=status["revision"]
                 )
+            elif state == "saving":
+                body += "<p>You can close this page while the connection is saved.</p>"
             elif state == "recovering":
                 body += self.form(
                     "cancel", provider, "Cancel sign-in", revision=status["revision"]
                 )
-                body += self.form("start", provider, "Start a new sign-in")
+                body += self.form(
+                    "start",
+                    provider,
+                    "Start a new sign-in",
+                    replace=status.get("_replace"),
+                )
             elif state == "disconnecting":
                 body += self.form(
                     "disconnect",
@@ -531,7 +950,8 @@ class Connections:
             self.page(
                 body,
                 refresh=any(
-                    item["state"] in ("connecting", "recovering") for item in statuses
+                    item["state"] in ("connecting", "saving", "recovering")
+                    for item in statuses
                 ),
             ),
         )
@@ -758,9 +1178,11 @@ class Connections:
             ):
                 raise ValueError("form")
             values = parse_qs(payload.decode(), strict_parsing=True, max_num_fields=4)
-            if not {"provider"} <= set(values) <= {"provider", "revision"} or any(
-                len(v) != 1 for v in values.values()
-            ):
+            if not {"provider"} <= set(values) <= {
+                "provider",
+                "revision",
+                "replace",
+            } or any(len(v) != 1 for v in values.values()):
                 raise ValueError("provider")
             provider = values["provider"][0]
             selected = self.adapters[user]._service_ready()._registry.get(provider)
@@ -777,12 +1199,13 @@ class Connections:
             return confirm
         adapter = self.adapters[user]
         expected_revision = values.get("revision", [""])[0]
+        replace_id = values.get("replace", [None])[0]
         if action in ("cancel", "disconnect") and not expected_revision:
             return Response(status_code=400)
         try:
             if action == "start":
                 link = await adapter.dispatcher.run(
-                    lambda: self.connection(user, provider)
+                    lambda: self.connection(user, provider, replace=replace_id)
                 )
                 return RedirectResponse(link.url, status_code=303)
             if action == "disconnect":
@@ -793,9 +1216,45 @@ class Connections:
                     return RedirectResponse(self.home, status_code=303)
             else:
                 self.controls[user].cancel(provider, "default", expected_revision)
-            link = self.links.get((user, provider))
-            if link and link.context and link.context.target == expected_revision:
-                await adapter.dispatcher.run(lambda: self.relays[user].cancel(link))
+            settled_ids: set[str] = set()
+
+            def drain_links():
+                with self._start_lock(user, provider):
+                    if action == "disconnect":
+                        status = self.controls[user].status(provider)
+                        if (
+                            status["phase"] != 2
+                            or status["revision"] != disconnect_revision
+                        ):
+                            return
+                    link = self.links.get((user, provider))
+                    to_cancel = list(self._pending_close.get((user, provider), ()))
+                    if (
+                        link
+                        and link.context
+                        and link.context.target == expected_revision
+                        and link not in to_cancel
+                    ):
+                        to_cancel.append(link)
+                    if action == "disconnect":
+                        for item in self._provider_links(user, provider):
+                            if item not in to_cancel:
+                                to_cancel.append(item)
+                    if not to_cancel:
+                        return
+                    remaining = []
+                    for item in to_cancel:
+                        open_now, _ = self._cancel_and_check(user, item)
+                        if open_now:
+                            remaining.append(item)
+                        else:
+                            settled_ids.add(item.id)
+                    if remaining:
+                        self._pending_close[user, provider] = remaining
+                    else:
+                        self._pending_close.pop((user, provider), None)
+
+            await adapter.dispatcher.run(drain_links)
             if action == "disconnect":
 
                 def disconnect():
@@ -808,6 +1267,31 @@ class Connections:
                         connection_revision=disconnect_revision,
                         drain=service._release_browser,
                     )
+                    with self._start_lock(user, provider):
+                        open_ids = {
+                            item.id
+                            for item in self._pending_close.get((user, provider), ())
+                        }
+                        purge_ids = settled_ids - open_ids
+                        current_link = self.links.get((user, provider))
+                        if current_link is not None and current_link.id in purge_ids:
+                            self.links.pop((user, provider), None)
+                        known = self._known_links.get((user, provider))
+                        if known:
+                            for lid in list(known):
+                                if lid in purge_ids:
+                                    known.pop(lid, None)
+                            if not known:
+                                self._known_links.pop((user, provider), None)
+                        with self.relays[user]._lock:
+                            for aid, alink in list(self.relays[user]._links.items()):
+                                if alink.key == provider and aid in purge_ids:
+                                    alink.closed = True
+                                    self.relays[user]._links.pop(aid, None)
+                            for rid, rlink in list(self.relays[user]._retired.items()):
+                                if rlink.key == provider and rid in purge_ids:
+                                    rlink.closed = True
+                                    self.relays[user]._retired.pop(rid, None)
 
                 await adapter.dispatcher.run(disconnect)
         except LinkLimited:

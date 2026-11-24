@@ -594,3 +594,118 @@ def test_corrupt_controls_fail_closed(tmp_path):
     controls.path("fixture").write_text('"invalid"')
     with pytest.raises(PersistenceError):
         controls.require_active("fixture")
+
+
+def test_start_new_sign_in_layout_429_and_stuck_teardown(accounts, tmp_path):
+    app, _, backends = make_app(accounts, tmp_path)
+    origin = {"origin": "http://127.0.0.1"}
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        browser_login(app, client)
+        first_url = owner_connection(client)
+        assert (
+            client.post(
+                first_url + "/start", json={"layout": "phone"}, headers=origin
+            ).status_code
+            == 200
+        )
+        page = client.get("/connections/").text
+        assert "Sign-in is in progress (mobile view)" in page
+        assert "Continue sign-in" in page
+        assert "Start new sign-in" in page
+
+        # Unbound start (no replace) while an active viewer exists returns 409.
+        first_id = first_url.rsplit("/", 1)[-1]
+        unbound = client.post(
+            "/connections/start",
+            data={"provider": "fixture"},
+            headers=origin,
+            follow_redirects=False,
+        )
+        assert unbound.status_code == 409
+        assert client.get(first_url + "/state").json()["state"] in (
+            "starting",
+            "waiting",
+        )
+
+        # Rate limit returns 429 and preserves active window and control revision.
+        controls = app.state.connections.controls["alice"]
+        before_rev = controls.status("fixture")["revision"]
+        app.state.connections.relays["alice"].links_per_hour = 1
+        limited = client.post(
+            "/connections/start",
+            data={"provider": "fixture", "replace": first_id},
+            headers=origin,
+            follow_redirects=False,
+        )
+        assert limited.status_code == 429
+        assert controls.status("fixture")["revision"] == before_rev
+        assert client.get(first_url + "/state").json()["state"] in (
+            "starting",
+            "waiting",
+        )
+        app.state.connections.relays["alice"].links_per_hour = 6
+
+        # Stuck backend teardown returns 409, keeps revision, and closes candidate.
+        backend = backends[0]
+        orig_close = backend.close
+        backend.close = lambda identifier, *, cancel_only=False: backend.closed.append(
+            "stuck"
+        )
+        stuck = client.post(
+            "/connections/start",
+            data={"provider": "fixture", "replace": first_id},
+            headers=origin,
+            follow_redirects=False,
+        )
+        assert stuck.status_code == 409
+        assert controls.status("fixture")["revision"] == before_rev
+        assert (
+            client.post(
+                "/connections/start",
+                data={"provider": "fixture", "replace": first_id},
+                headers=origin,
+                follow_redirects=False,
+            ).status_code
+            == 409
+        )
+        backend.close = orig_close
+        rec_url = owner_connection(client)
+        assert (
+            client.post(
+                rec_url + "/start", json={"layout": "desktop"}, headers=origin
+            ).status_code
+            == 200
+        )
+        # Stale replacement form fails even while newer viewer is layout-switching.
+        active_link = app.state.connections.links["alice", "fixture"]
+        assert (
+            client.post(
+                rec_url + "/cancel", json={"for_restart": True}, headers=origin
+            ).status_code
+            == 200
+        )
+        stale_replace = client.post(
+            "/connections/start",
+            data={"provider": "fixture", "replace": first_id},
+            headers=origin,
+            follow_redirects=False,
+        )
+        assert stale_replace.status_code == 409
+        assert (
+            client.post(
+                rec_url + "/start", json={"layout": "phone"}, headers=origin
+            ).status_code
+            == 200
+        )
+
+        active_link.state = "saving"
+        assert (
+            client.post(
+                "/connections/start",
+                data={"provider": "fixture", "replace": active_link.id},
+                headers=origin,
+                follow_redirects=False,
+            ).status_code
+            == 409
+        )
+        assert "Saving connection" in client.get("/connections/").text

@@ -162,7 +162,12 @@ def test_relay_pages_keep_owner_checks_text_and_outcomes(accounts, tmp_path, cas
             assert_identity(response.text, PageText)
         if case == "ready":
             assert "Connect fixture to Newsclip" in response.text
-            assert "device passkeys do not work in this remote window" in response.text
+            assert (
+                "device passkeys aren&#x27;t available in this remote window"
+                in response.text
+                or "device passkeys aren't available in this remote window"
+                in response.text
+            )
             assert "Choose the publisher account you intend to use." in response.text
             config = json.loads(
                 response.text.split("const CONFIG = ", 1)[1].split(";</script>", 1)[0]

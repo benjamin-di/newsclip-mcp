@@ -1,4 +1,4 @@
-.PHONY: check check-mcp check-standalone check-runtime-lock
+.PHONY: check check-mcp check-standalone check-runtime-lock rollback-check
 
 # Keep local and CI verification identical. Live providers are always explicit.
 check: check-runtime-lock
@@ -7,6 +7,9 @@ check: check-runtime-lock
 	uv run --locked --extra local mypy src/newsclip
 	uv run --locked --extra local pytest -q -m "not live"
 	git diff --check
+
+rollback-check:
+	uv run --locked --extra local python scripts/rollback-check.py
 
 # Keep image dependencies independent of the application's release version.
 check-runtime-lock:
