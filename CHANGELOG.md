@@ -3,6 +3,17 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.2.2] - 2026-11-26
+
+### Fixed
+
+- Remove the duplicate `"Disconnected."` prefix from the disconnected card callout on `/connections/` so the status pill carries the single `"Disconnected"` label and Playwright strict-mode acceptance locators match uniquely.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.2.1, 2.2.0, and 2.1.7; no storage or configuration changes.
+
 ## [2.2.1] - 2026-11-26
 
 ### Fixed

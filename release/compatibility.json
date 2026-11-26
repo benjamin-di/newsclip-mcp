@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": "2.2.1",
+  "version": "2.2.2",
   "state": {
     "change": "none",
     "from": "browser-sessions sqlite v2 with revocations and session_families (signin-window 0.10.0)",

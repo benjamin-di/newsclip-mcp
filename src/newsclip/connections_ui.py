@@ -438,7 +438,12 @@ def describe_access(
     if state == "recovering":
         return ("in_progress", "Finishing…", "warn", detail)
     if state == "disconnected":
-        return ("disconnected", "Disconnected", "muted", detail)
+        return (
+            "disconnected",
+            "Disconnected",
+            "muted",
+            "Connect this subscription to use it again.",
+        )
 
     if health is None:
         return ("not_connected", "Not connected", "muted", detail)
