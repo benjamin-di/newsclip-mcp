@@ -67,7 +67,7 @@ def test_sessionless_and_foreign_origin_actions_never_change_state(
 
 
 @pytest.mark.parametrize("action", ("share", "disconnect"))
-def test_step_up_returns_home_without_replaying_sensitive_action(
+def test_aged_valid_session_completes_share_and_disconnect_without_reauth(
     accounts, tmp_path, action
 ):
     app, _, _ = make_app(accounts, tmp_path)
@@ -82,21 +82,55 @@ def test_step_up_returns_home_without_replaying_sensitive_action(
         data = {"provider": "fixture", "revision": revision}
         if action == "share":
             data.update(member="bob", grant="new")
+        response = client.post(
+            "/connections/" + action,
+            data=data,
+            headers={"origin": ORIGIN},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/connections/"
+        assert "reauth" not in response.headers["location"]
+        if action == "share":
+            assert "bob" in portal.access.view("alice", "fixture")[0]["grants"]
+        else:
+            assert portal.controls["alice"].status("fixture")["phase"] == 1
+
+
+@pytest.mark.parametrize("action", ("share", "disconnect"))
+def test_signed_out_login_returns_home_without_replaying_action(
+    accounts, tmp_path, action
+):
+    app, _, _ = make_app(accounts, tmp_path)
+    with TestClient(app, base_url=ORIGIN) as client:
+        portal = app.state.connections
+        selected = store(portal.controls["alice"].root.parent)
+        candidate, proof = material()
+        selected.promote_browser_session(candidate, proof, expected_generation=None)
+        portal.adapters["alice"]._service_ready()._sessions = selected
+        revision = portal.controls["alice"].status("fixture")["revision"]
+        data = {"provider": "fixture", "revision": revision}
+        if action == "share":
+            data.update(member="bob", grant="new")
         before = snapshot(portal)
+
+        signed_out_get = client.get("/connections/", follow_redirects=False)
+        assert signed_out_get.status_code == 303
+        assert signed_out_get.headers["location"] == "/connections/login"
+        assert "reauth" not in signed_out_get.headers["location"]
+
         denied = client.post(
             "/connections/" + action,
             data=data,
             headers={"origin": ORIGIN},
             follow_redirects=False,
         )
-        assert denied.status_code == 403 and "location" not in denied.headers
-        assert 'href="/connections/login?reauth=1"' in denied.text
-        assert "Nothing has changed yet" in denied.text
+        assert denied.status_code == 401 and "location" not in denied.headers
         assert snapshot(portal) == before
 
-        # Follow the real OIDC exchange. Returning to Connections only displays
-        # the current state; the original POST is never resumed or retained.
-        start = client.get("/connections/login?reauth=1", follow_redirects=False)
+        # Follow ordinary OIDC login. Returning to Connections only displays
+        # the current state; the failed POST is never resumed or replayed.
+        start = client.get("/connections/login", follow_redirects=False)
         provider = app.state.oidc_provider
         provider.tamper = {"person_id": "alice"}
         callback = urlsplit(
@@ -109,6 +143,7 @@ def test_step_up_returns_home_without_replaying_sensitive_action(
         assert confirmed.headers["location"] == "/connections/"
         assert client.get(confirmed.headers["location"]).status_code == 200
         assert snapshot(portal) == before
+
         repeated = client.post(
             "/connections/" + action,
             data=data,
@@ -116,6 +151,7 @@ def test_step_up_returns_home_without_replaying_sensitive_action(
             follow_redirects=False,
         )
         assert repeated.status_code == 303
+        assert repeated.headers["location"] == "/connections/"
         if action == "share":
             assert "bob" in portal.access.view("alice", "fixture")[0]["grants"]
         else:

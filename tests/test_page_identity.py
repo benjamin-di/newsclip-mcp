@@ -84,7 +84,6 @@ def test_home_uses_installed_identity_despite_runtime_overrides(
         ("sessionless", 401, "Your sign-in has ended"),
         ("foreign_origin", 403, ""),
         ("unmapped", 403, "Request refused"),
-        ("step_up", 403, "Nothing has changed yet"),
         ("callback", 403, "We could not confirm your sign-in"),
         ("unavailable", 503, "Sign-in is unavailable"),
         ("logout", 200, "You are signed out of Connections"),
@@ -96,7 +95,7 @@ def test_auth_pages_keep_outcomes_and_connection_state(
     app, _, backends = make_app(accounts, tmp_path)
     portal = app.state.connections
     with TestClient(app, base_url=ORIGIN) as client:
-        if case in ("foreign_origin", "step_up", "logout"):
+        if case in ("foreign_origin", "logout"):
             browser_login(app, client, auth_time=int(time.time()) - 3600)
         elif case == "unmapped":
             browser_login(app, client, "unregistered")
@@ -111,7 +110,7 @@ def test_auth_pages_keep_outcomes_and_connection_state(
             monkeypatch.setattr(portal.auth.client, "load_server_metadata", unavailable)
             response = client.get("/connections/login")
         else:
-            action = {"step_up": "share", "logout": "logout"}.get(case, "start")
+            action = "logout" if case == "logout" else "start"
             response = client.post(
                 "/connections/" + action,
                 data={

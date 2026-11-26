@@ -238,7 +238,7 @@ def test_stale_cancel_and_disconnect_forms_preserve_a_new_owner_attempt(
 ):
     app, _, _ = make_app(accounts, tmp_path)
     with TestClient(app, base_url="http://127.0.0.1") as client:
-        browser_login(app, client, suffix="?reauth=1")
+        browser_login(app, client)
         controls = app.state.connections.controls["alice"]
         stale = controls.status("fixture")["revision"]
         url = owner_connection(client)
@@ -306,12 +306,17 @@ def test_browser_actions_require_exact_origin_and_own_provider(accounts, tmp_pat
         assert client.get(response.headers["location"]).status_code == 200
 
 
-def test_disconnect_requires_fresh_authentication(accounts, tmp_path):
+def test_aged_valid_session_completes_disconnect_without_reauth(accounts, tmp_path):
     app, _, _ = make_app(accounts, tmp_path)
     with TestClient(app, base_url="http://127.0.0.1") as client:
-        # An older identity-provider session is not a fresh confirmation.
+        portal = app.state.connections
+        selected = store(portal.controls["alice"].root.parent)
+        candidate, proof = material()
+        selected.promote_browser_session(candidate, proof, expected_generation=None)
+        portal.adapters["alice"]._service_ready()._sessions = selected
+        # An aged but valid browser session completes disconnect directly.
         browser_login(app, client, auth_time=int(time.time()) - 3600)
-        controls = app.state.connections.controls["alice"]
+        controls = portal.controls["alice"]
         revision = controls.status("fixture")["revision"]
         response = client.post(
             "/connections/disconnect",
@@ -319,20 +324,10 @@ def test_disconnect_requires_fresh_authentication(accounts, tmp_path):
             headers={"origin": "http://127.0.0.1"},
             follow_redirects=False,
         )
-        # A page whose link starts step-up, never a redirect a browser would cancel.
-        assert response.status_code == 403 and "location" not in response.headers
-        assert 'href="/connections/login?reauth=1"' in response.text
-        assert controls.status("fixture")["phase"] == 0
-        # A sign-in the provider authenticated just now already is one.
-        browser_login(app, client)
-        response = client.post(
-            "/connections/disconnect",
-            data={"provider": "fixture", "revision": revision},
-            headers={"origin": "http://127.0.0.1"},
-            follow_redirects=False,
-        )
-        # Past the identity check: the outcome is the disconnect's own, not a sign-in.
-        assert "reauth" not in response.headers.get("location", "")
+        assert response.status_code == 303
+        assert response.headers["location"] == "/connections/"
+        assert "reauth" not in response.headers["location"]
+        assert controls.status("fixture")["phase"] == 1
 
 
 def test_viewer_cancel_fences_the_final_writer(accounts, tmp_path):

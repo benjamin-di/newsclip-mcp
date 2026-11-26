@@ -3,6 +3,17 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.2.3] - 2026-11-27
+
+### Changed
+
+- Remove custom 5-minute freshness gates on Connections `share` and `disconnect` so ordinary valid browser sessions (>300s) can share and disconnect without `?reauth=1` step-up while preserving ordinary OIDC login, 401 expired-POST refusal without callback replay, Origin, revision, admission, and disconnect barriers.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.2.2, 2.2.1, and 2.2.0; no storage or configuration changes.
+
 ## [2.2.2] - 2026-11-26
 
 ### Fixed

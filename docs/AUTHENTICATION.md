@@ -72,7 +72,7 @@ client's API access remains a separate boundary. Publisher verification proves
 access to the configured article, not the person's identity at the publisher.
 Choose the intended publisher account in the sign-in window.
 
-Disconnect requires a fresh identity-provider login. A durable per-user,
+Disconnect uses the ordinary signed-in browser session. A durable per-user,
 per-provider, per-account barrier blocks readers, maintenance and the final
 session writer before cleanup starts. Newsclip drains retained browsers and
 removes the active session and profiles. If cleanup cannot finish, the

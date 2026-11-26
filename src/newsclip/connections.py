@@ -52,9 +52,6 @@ from .subscription_access import SubscriptionAccess
 from .tenancy import application_root, load_users, user_scope
 from .ui import renderer_options
 
-FRESH_SECONDS = (
-    300  # Share and disconnect need an identity-provider confirmation at most this old
-)
 _CHECK_COOLDOWN_SECONDS = 15.0
 _CHECK_TTL_SECONDS = 600.0
 
@@ -1559,12 +1556,6 @@ class Connections:
                 raise ValueError("publisher needs no connection")
         except (ValueError, UnicodeError, NewsclipError):
             return Response(status_code=400)
-        if action == "share" and (
-            confirm := self.auth.require_fresh(
-                request, max_age=FRESH_SECONDS, action="share this connection"
-            )
-        ):
-            return confirm
         access = self.access
 
         def apply():
@@ -1651,12 +1642,6 @@ class Connections:
         except (ValueError, UnicodeError, NewsclipError):
             return Response(status_code=400)
         action = request.url.path.rsplit("/", 1)[1]
-        if action == "disconnect" and (
-            confirm := self.auth.require_fresh(
-                request, max_age=FRESH_SECONDS, action="disconnect this publisher"
-            )
-        ):
-            return confirm
         adapter = self.adapters[user]
         expected_revision = values.get("revision", [""])[0]
         replace_id = values.get("replace", [None])[0]
