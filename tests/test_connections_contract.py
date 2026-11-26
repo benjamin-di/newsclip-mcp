@@ -12,7 +12,17 @@ from test_standalone import browser_login, make_app
 from newsclip.errors import SessionRequiredError
 
 ORIGIN = "http://127.0.0.1"
-ACTIONS = ("start", "cancel", "disconnect", "share", "unshare", "choose", "leave")
+ACTIONS = (
+    "start",
+    "cancel",
+    "disconnect",
+    "share",
+    "unshare",
+    "choose",
+    "leave",
+    "check",
+    "check-all",
+)
 
 
 def snapshot(portal):

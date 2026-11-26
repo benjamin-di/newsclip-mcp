@@ -557,17 +557,8 @@ class NewsclipService:
                 refresh_failure=acquired.refresh_failure,
             )
 
-    def session_status(self, provider_key: str) -> SessionHealth:
-        if self._subscription_routing is not None:
-            reader = self._subscription_routing.reader(provider_key)
-            if reader is not self:
-                return reader.session_status(provider_key).model_copy(
-                    update={
-                        "renewal_incident_id": None,
-                        "renewal_diagnostic_id": None,
-                        "recovery": None,
-                    }
-                )
+    def own_session_status(self, provider_key: str) -> SessionHealth:
+        """Derived session health for this user's own store, bypassing routing."""
         self._session_provider(provider_key)
         if self._sessions is None:
             raise PersistenceError("session source is not configured")
@@ -598,6 +589,19 @@ class NewsclipService:
                 update["health"] = SessionHealthState.DEGRADED
             health = health.model_copy(update=update)
         return health
+
+    def session_status(self, provider_key: str) -> SessionHealth:
+        if self._subscription_routing is not None:
+            reader = self._subscription_routing.reader(provider_key)
+            if reader is not self:
+                return reader.session_status(provider_key).model_copy(
+                    update={
+                        "renewal_incident_id": None,
+                        "renewal_diagnostic_id": None,
+                        "recovery": None,
+                    }
+                )
+        return self.own_session_status(provider_key)
 
     def session_checkpoint(
         self,
@@ -643,6 +647,13 @@ class NewsclipService:
         self._verify_session_or_downgrade(provider, artifact)
         # _verify_session_or_downgrade raises on anything but a positive live
         # verification, so reaching here is delivered session evidence.
+        record_verified = getattr(self._sessions, "record_verified", None)
+        if callable(record_verified):
+            updated = record_verified(
+                provider_key, generation_id=artifact.generation_id
+            )
+            if updated is not None:
+                artifact = updated
         self._session_evidence_verified(provider_key, hold_id=hold_id)
         checked_at = self._wall_clock()
         if checked_at.tzinfo is None:

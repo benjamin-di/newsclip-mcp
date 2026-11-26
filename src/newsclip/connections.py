@@ -11,11 +11,13 @@ import stat
 import threading
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from account_connections.ui import Offer, action_form, selection_controls
-from signin_window.connections import disconnect_confirmation, timestamp
+from account_connections.ui import action_form
+from signin_window.connections import disconnect_confirmation
 from signin_window.connections import page as connection_page
 from signin_window.oidc import BrowserAuth, OIDCConfig
 from signin_window.page import PageText
@@ -24,8 +26,27 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 from starlette.routing import Route
 
 from .connection_controls import ConnectionControls
-from .errors import NewsclipError, UsageError
-from .models import SessionStatus
+from .connections_ui import (
+    CONNECTIONS_STYLE,
+    describe_access,
+    render_avatar,
+    render_check_banner,
+    render_meta,
+    render_overview,
+    render_pill,
+    render_topbar,
+)
+from .connections_ui import (
+    PUBLISHER_NAMES as _PUBLISHER_NAMES,
+)
+from .errors import (
+    AccountAlertError,
+    NewsclipError,
+    ProviderTransportError,
+    SessionRequiredError,
+    UsageError,
+)
+from .models import SessionHealth, SessionStatus
 from .sessions import ServingSessions, SessionStore
 from .subscription_access import SubscriptionAccess
 from .tenancy import application_root, load_users, user_scope
@@ -34,16 +55,8 @@ from .ui import renderer_options
 FRESH_SECONDS = (
     300  # Share and disconnect need an identity-provider confirmation at most this old
 )
-
-_PUBLISHER_NAMES = {
-    "ft": "Financial Times",
-    "economist": "The Economist",
-    "wsj": "The Wall Street Journal",
-    "nyt": "The New York Times",
-    "bloomberg": "Bloomberg",
-    "reuters": "Reuters",
-    "cnbc": "CNBC",
-}
+_CHECK_COOLDOWN_SECONDS = 15.0
+_CHECK_TTL_SECONDS = 600.0
 
 
 class _ReservedRelay(Relay):
@@ -223,6 +236,9 @@ class Connections:
         self._pending_close: dict[tuple[str, str], list[Link]] = {}
         self._known_links: dict[tuple[str, str], dict[str, Link]] = {}
         self._draining: set[tuple[str, str]] = set()
+        self._checks: dict[tuple[str, str], dict[str, Any]] = {}
+        self._checks_lock = threading.Lock()
+        self._check_threads: list[threading.Thread] = []
 
     @staticmethod
     def _link_still_open(link: Link) -> bool:
@@ -647,6 +663,176 @@ class Connections:
         store = source._store if isinstance(source, ServingSessions) else source
         return store if isinstance(store, SessionStore) else None
 
+    def _own_health(self, service, store, provider: str) -> SessionHealth | None:
+        own_status = getattr(service, "own_session_status", None)
+        if callable(own_status):
+            try:
+                return own_status(provider)
+            except (NewsclipError, OSError, ValueError):
+                pass
+        return store.status(provider) if store else None
+
+    def _owner_access_summary(
+        self, owner: str, provider: str
+    ) -> tuple[str, str, str] | None:
+        """Return safe (access_status, badge_label, tone) for a shared owner's provider.
+
+        Never exposes private incident IDs, diagnostic IDs or recovery details.
+        """
+        adapter = self.adapters.get(owner)
+        controls = self.controls.get(owner)
+        if adapter is None or controls is None:
+            return None
+        try:
+            control = controls.status(provider)
+            if control["phase"] == 2:
+                return ("in_progress", "Disconnecting", "warn")
+            if control["phase"]:
+                return ("disconnected", "Owner disconnected", "bad")
+            service = adapter._service_ready()
+            store = self._store(owner)
+            health = self._own_health(service, store, provider)
+        except (NewsclipError, OSError, ValueError):
+            return ("unavailable", "Unavailable", "bad")
+        if health is None or health.status is not SessionStatus.VERIFIED:
+            if health is not None and health.status is SessionStatus.OPERATOR_ACTION:
+                return ("action_required", "Needs owner reconnect", "bad")
+            if health is not None and health.status is SessionStatus.COOLDOWN:
+                return ("cooldown", "Paused", "warn")
+            return ("not_connected", "Not connected", "muted")
+        access_status, label, tone, _ = describe_access(
+            state="connected",
+            health=health.model_copy(
+                update={
+                    "renewal_incident_id": None,
+                    "renewal_diagnostic_id": None,
+                    "recovery": None,
+                }
+            ),
+            detail="",
+        )
+        return (access_status, label, tone)
+
+    def _current_check(
+        self, user: str, provider: str, revision: str | None
+    ) -> dict[str, Any] | None:
+        now = self.clock()
+        with self._checks_lock:
+            record = self._checks.get((user, provider))
+            if record is None:
+                return None
+            if revision is not None and record.get("revision") != revision:
+                self._checks.pop((user, provider), None)
+                return None
+            if record.get("state") != "checking":
+                finished = record.get("finished_at")
+                if (
+                    isinstance(finished, int | float)
+                    and now - finished > _CHECK_TTL_SECONDS
+                ):
+                    self._checks.pop((user, provider), None)
+                    return None
+            return {
+                "state": record["state"],
+                "checked_at": record.get("checked_at"),
+                "detail": record["detail"],
+            }
+
+    def start_check(self, user: str, provider: str) -> bool:
+        """Start a bounded background live verification for the user's own session."""
+        service = self.adapters[user]._service_ready()
+        selected = service._registry.get(provider)
+        if selected.login_recipe is None:
+            raise UsageError("this provider does not require sign-in")
+        control = self.controls[user].status(provider)
+        if control["phase"] != 0:
+            return False
+        revision = control["revision"]
+        now = self.clock()
+        with self._checks_lock:
+            existing = self._checks.get((user, provider))
+            if existing is not None and existing.get("revision") == revision:
+                if existing.get("state") == "checking":
+                    return False
+                finished = existing.get("finished_at")
+                if (
+                    isinstance(finished, int | float)
+                    and now - finished < _CHECK_COOLDOWN_SECONDS
+                ):
+                    return False
+            self._checks[user, provider] = {
+                "state": "checking",
+                "revision": revision,
+                "started_at": now,
+                "finished_at": None,
+                "checked_at": None,
+                "detail": "Running a live subscription check against the publisher…",
+            }
+            self._check_threads = [t for t in self._check_threads if t.is_alive()]
+
+        def run_check() -> None:
+            checked_at = datetime.fromtimestamp(self.clock(), UTC).isoformat()
+            try:
+                service.session_checkpoint(provider)
+            except SessionRequiredError:
+                result_state = "failed"
+                result_detail = (
+                    "Live check failed — sign-in is no longer valid. "
+                    "Reconnect to restore access."
+                )
+            except AccountAlertError:
+                result_state = "failed"
+                result_detail = (
+                    "Publisher reported an account alert — sign in directly "
+                    "on the publisher site, then reconnect."
+                )
+            except ProviderTransportError:
+                result_state = "inconclusive"
+                result_detail = (
+                    "Live check was inconclusive due to a temporary publisher or "
+                    "network issue. Your saved connection was kept."
+                )
+            except (NewsclipError, OSError, ValueError):
+                result_state = "inconclusive"
+                result_detail = (
+                    "Live check could not finish right now. "
+                    "Your saved connection was kept."
+                )
+            else:
+                result_state = "passed"
+                result_detail = "Live check passed — subscription access is working."
+            finished_at = self.clock()
+            with self._checks_lock:
+                current = self._checks.get((user, provider))
+                if current is not None and current.get("revision") == revision:
+                    self._checks[user, provider] = {
+                        "state": result_state,
+                        "revision": revision,
+                        "started_at": now,
+                        "finished_at": finished_at,
+                        "checked_at": checked_at,
+                        "detail": result_detail,
+                    }
+
+        thread = threading.Thread(
+            target=run_check,
+            name=f"newsclip-check-{user}-{provider}",
+            daemon=True,
+        )
+        with self._checks_lock:
+            self._check_threads.append(thread)
+        thread.start()
+        return True
+
+    def wait_checks(self, timeout: float = 10.0) -> None:
+        """Wait for any in-flight live checks to finish (primarily for tests)."""
+        deadline = time.monotonic() + timeout
+        with self._checks_lock:
+            threads = list(self._check_threads)
+        for thread in threads:
+            remaining = max(0.0, deadline - time.monotonic())
+            thread.join(timeout=remaining)
+
     def statuses(self, user, *, include_replace: bool = False):
         service = self.adapters[user]._service_ready()
         store = self._store(user)
@@ -663,19 +849,28 @@ class Connections:
             try:
                 control = self.controls[user].status(provider)
                 link = self.links.get((user, provider))
-                health = store.status(provider) if store else None
+                health = self._own_health(service, store, provider)
             except (NewsclipError, OSError, ValueError):
+                detail = (
+                    "Connection state is unavailable. "
+                    "Ask your administrator to recover this record."
+                )
                 items.append(
                     {
                         "provider": provider,
                         "name": _PUBLISHER_NAMES.get(provider, provider),
                         "revision": None,
                         "state": "unavailable",
-                        "detail": (
-                            "Connection state is unavailable. "
-                            "Ask your administrator to recover this record."
-                        ),
+                        "detail": detail,
+                        "access_status": "unavailable",
+                        "access_label": "Unavailable",
+                        "access_tone": "bad",
+                        "access_detail": detail,
+                        "health": None,
+                        "verified_age_seconds": None,
+                        "consecutive_renewal_failures": None,
                         "last_verified": None,
+                        "last_check": None,
                         "url": None,
                     }
                 )
@@ -737,6 +932,13 @@ class Connections:
                     "needs_signin",
                     "Connect the subscription you want to use.",
                 )
+            check = self._current_check(user, provider, control["revision"])
+            access_status, access_label, access_tone, access_detail = describe_access(
+                state=state,
+                health=health,
+                check=check,
+                detail=detail,
+            )
             rec_replace = None
             if (
                 include_replace
@@ -761,9 +963,23 @@ class Connections:
                     "revision": control["revision"],
                     "state": state,
                     "detail": detail,
+                    "access_status": access_status,
+                    "access_label": access_label,
+                    "access_tone": access_tone,
+                    "access_detail": access_detail,
+                    "health": health.health.value
+                    if health and health.health is not None
+                    else None,
+                    "verified_age_seconds": health.verified_age_seconds
+                    if health
+                    else None,
+                    "consecutive_renewal_failures": health.consecutive_renewal_failures
+                    if health
+                    else None,
                     "last_verified": health.last_verified_at.isoformat()
                     if health and health.last_verified_at
                     else None,
+                    "last_check": check,
                     "url": link.url if state == "connecting" and link else None,
                     **({"layout": layout} if state in ("connecting", "saving") else {}),
                     **({"_replace": rec_replace} if include_replace else {}),
@@ -796,7 +1012,7 @@ class Connections:
             else "quiet"
             if action == "cancel"
             else "secondary"
-            if text in ("Reconnect", "Start new sign-in")
+            if action == "check" or text in ("Reconnect", "Start new sign-in")
             else "primary"
         )
         form = (
@@ -838,125 +1054,307 @@ class Connections:
             sharing_snapshots = None
             sharing_members = None
             sharing_failed = False
+            shared_health: dict[tuple[str, str], tuple[str, str, str] | None] = {}
             if self.access is not None:
                 try:
                     sharing_snapshots, sharing_members = self.access.view_all(
                         user, [item["provider"] for item in loaded_statuses]
                     )
+                    for item in loaded_statuses:
+                        provider = item["provider"]
+                        snap = sharing_snapshots.get(provider)
+                        if snap is None:
+                            continue
+                        row, offered, _, _ = snap
+                        owners = {owner for owner, _ in offered}
+                        selected = row["selection"]
+                        if selected and selected["owner"] != user:
+                            owners.add(selected["owner"])
+                        for owner in owners:
+                            shared_health[owner, provider] = self._owner_access_summary(
+                                owner, provider
+                            )
                 except (NewsclipError, OSError, ValueError):
                     sharing_failed = True
-            return loaded_statuses, sharing_snapshots, sharing_members, sharing_failed
+            return (
+                loaded_statuses,
+                sharing_snapshots,
+                sharing_members,
+                sharing_failed,
+                shared_health,
+            )
 
         (
             statuses,
             sharing_snapshots,
             sharing_members,
             sharing_failed,
+            shared_health,
         ) = await self.adapters[user].dispatcher.run(load_index)
-        body = "<p>Signed in as " + html.escape(identity["name"]) + ".</p>"
+
+        effective_tones: list[str] = []
+        cards: list[str] = []
+        any_checking = False
+        any_checkable = False
+
         for status in statuses:
             provider, state = status["provider"], status["state"]
-            role = "alert" if state == "unavailable" else "status"
-            body += (
-                f'<article id="{html.escape(provider)}">'
-                f"<h2>{html.escape(status['name'])}</h2>"
-                f"<p role={role}>{html.escape(status['detail'])}</p>"
+            is_checking = status["access_status"] == "checking"
+            if is_checking:
+                any_checking = True
+            if state == "connected":
+                any_checkable = True
+
+            card_label = status["access_label"]
+            card_tone = status["access_tone"]
+            card_detail = status["access_detail"]
+            callout_tone = status["access_tone"]
+            source_label: str | None = None
+            using_shared = False
+
+            if (
+                self.access is not None
+                and not sharing_failed
+                and sharing_snapshots is not None
+                and provider in sharing_snapshots
+            ):
+                row, _, _, admitted_ok = sharing_snapshots[provider]
+                selected = row["selection"]
+                if selected and selected["owner"] != user:
+                    using_shared = True
+                    owner = selected["owner"]
+                    if admitted_ok is False:
+                        card_label, card_tone = "Access removed", "bad"
+                        callout_tone = "bad"
+                        card_detail = (
+                            f"Shared access from {owner} was removed or changed. "
+                            "Choose another subscription below or connect your own."
+                        )
+                        source_label = f"Selected: {owner}'s subscription (removed)"
+                    else:
+                        owner_info = shared_health.get((owner, provider))
+                        if owner_info is not None:
+                            _, o_label, o_tone = owner_info
+                            card_label, card_tone = o_label, o_tone
+                            source_label = f"Using {owner}'s subscription ({o_label})"
+                            if state == "needs_signin":
+                                callout_tone = o_tone
+                                if o_tone == "ok":
+                                    card_detail = (
+                                        f"Using {owner}'s subscription — "
+                                        "access is working. You can also "
+                                        "connect your own subscription below."
+                                    )
+                                else:
+                                    card_detail = (
+                                        f"{owner}'s shared subscription status "
+                                        f"is {o_label}. You can also connect "
+                                        "your own subscription below."
+                                    )
+                        else:
+                            source_label = f"Using {owner}'s subscription"
+                elif selected and selected["owner"] == user:
+                    source_label = "Active source: Your subscription"
+                else:
+                    source_label = "Active source: None selected"
+
+            last_check = status.get("last_check")
+            show_check_banner = last_check
+            if (
+                last_check
+                and last_check.get("state") == "passed"
+                and status["access_status"] == "working"
+                and not using_shared
+            ):
+                card_detail = str(last_check["detail"])
+                show_check_banner = None
+
+            effective_tones.append(card_tone)
+            pulse = is_checking or state in ("connecting", "saving")
+            role = "alert" if state == "unavailable" or card_tone == "bad" else "status"
+            subtitle = (
+                f'<p class="nc-pub-sub">{html.escape(source_label)}</p>'
+                if source_label and using_shared
+                else ""
             )
-            if status["last_verified"]:
-                body += timestamp(status["last_verified"])
+
+            tone_attr = html.escape(card_tone, quote=True)
+            callout_attr = html.escape(callout_tone, quote=True)
+            card_parts = [
+                f'<article class="nc-card nc-tone-{tone_attr}" '
+                f'id="{html.escape(provider, quote=True)}">',
+                '<div class="nc-card-head">',
+                '<div class="nc-pub">',
+                render_avatar(provider),
+                f'<div><h2 class="nc-pub-title">{html.escape(status["name"])}</h2>'
+                f"{subtitle}</div>",
+                "</div>",
+                render_pill(card_label, card_tone, pulse=pulse),
+                "</div>",
+                f'<p class="nc-callout nc-callout--{callout_attr}" '
+                f'role="{role}">{html.escape(card_detail)}</p>',
+                render_check_banner(show_check_banner),
+                render_meta(
+                    last_verified=status["last_verified"],
+                    verified_age_seconds=status.get("verified_age_seconds"),
+                    source_label=source_label if not using_shared else None,
+                ),
+            ]
+
+            actions: list[str] = []
+            disconnect_html = ""
             if state == "unavailable":
                 pass
             elif state == "connecting":
-                body += (
-                    f'<a class="button" href="{html.escape(status["url"])}">'
-                    "Continue sign-in</a>"
+                continue_href = html.escape(status["url"], quote=True)
+                actions.append(
+                    f'<a class="button" href="{continue_href}">Continue sign-in</a>'
                 )
-                body += self.form(
-                    "start",
-                    provider,
-                    "Start new sign-in",
-                    replace=status["url"].rsplit("/", 1)[-1],
+                actions.append(
+                    self.form(
+                        "start",
+                        provider,
+                        "Start new sign-in",
+                        replace=status["url"].rsplit("/", 1)[-1],
+                    )
                 )
-                body += self.form(
-                    "cancel", provider, "Cancel sign-in", revision=status["revision"]
+                actions.append(
+                    self.form(
+                        "cancel",
+                        provider,
+                        "Cancel sign-in",
+                        revision=status["revision"],
+                    )
                 )
             elif state == "saving":
-                body += "<p>You can close this page while the connection is saved.</p>"
-            elif state == "recovering":
-                body += self.form(
-                    "cancel", provider, "Cancel sign-in", revision=status["revision"]
+                card_parts.append(
+                    '<p class="muted">'
+                    "You can close this page while the connection is saved.</p>"
                 )
-                body += self.form(
-                    "start",
-                    provider,
-                    "Start a new sign-in",
-                    replace=status.get("_replace"),
+            elif state == "recovering":
+                actions.append(
+                    self.form(
+                        "start",
+                        provider,
+                        "Start a new sign-in",
+                        replace=status.get("_replace"),
+                    )
+                )
+                actions.append(
+                    self.form(
+                        "cancel",
+                        provider,
+                        "Cancel sign-in",
+                        revision=status["revision"],
+                    )
                 )
             elif state == "disconnecting":
-                body += self.form(
-                    "disconnect",
-                    provider,
-                    "Finish disconnecting",
-                    revision=status["revision"],
+                actions.append(
+                    self.form(
+                        "disconnect",
+                        provider,
+                        "Finish disconnecting",
+                        revision=status["revision"],
+                    )
                 )
             else:
-                body += self.form(
-                    "start",
-                    provider,
-                    "Reconnect" if state == "connected" else "Connect",
-                )
+                if state == "connected":
+                    if is_checking:
+                        actions.append(
+                            '<button type="button" class="secondary" disabled>'
+                            "Checking…</button>"
+                        )
+                    else:
+                        actions.append(self.form("check", provider, "Check access"))
+                    actions.append(self.form("start", provider, "Reconnect"))
+                else:
+                    actions.append(self.form("start", provider, "Connect"))
                 if state in ("connected", "needs_signin") and status["revision"]:
-                    body += self.form(
+                    disconnect_html = self.form(
                         "disconnect",
                         provider,
                         "Disconnect this subscription",
                         revision=status["revision"],
                     )
+
+            if actions:
+                card_parts.append(f'<div class="nc-actions">{"".join(actions)}</div>')
+
             if self.access is not None:
                 if (
                     sharing_failed
                     or sharing_snapshots is None
                     or provider not in sharing_snapshots
                 ):
-                    body += (
+                    card_parts.append(
+                        '<div class="nc-sharing">'
                         '<p role="alert">Sharing controls are unavailable. '
                         "Ask the administrator to recover this record. "
                         "Your own connection controls above remain available.</p>"
+                        "</div>"
                     )
                 else:
                     try:
-                        body += self.sharing_body(
-                            user,
-                            provider,
-                            status,
-                            snapshot=sharing_snapshots[provider],
-                            members=sharing_members,
+                        card_parts.append(
+                            self.sharing_body(
+                                user,
+                                provider,
+                                status,
+                                snapshot=sharing_snapshots[provider],
+                                members=sharing_members,
+                                shared_health=shared_health,
+                            )
                         )
                     except (NewsclipError, OSError, ValueError):
-                        body += (
+                        card_parts.append(
+                            '<div class="nc-sharing">'
                             '<p role="alert">Sharing controls are unavailable. '
                             "Ask the administrator to recover this record. "
                             "Your own connection controls above remain available.</p>"
+                            "</div>"
                         )
-            body += "</article>"
-        body += (
-            "<p class=muted>Connecting a subscription does not give an assistant "
+
+            if disconnect_html:
+                card_parts.append(disconnect_html)
+
+            card_parts.append("</article>")
+            cards.append("".join(card_parts))
+
+        body = (
+            f"<style>{CONNECTIONS_STYLE}</style>"
+            + render_topbar(identity["name"], self.home + "logout")
+            + render_overview(
+                effective_tones,
+                check_all_action=self.home + "check-all" if any_checkable else None,
+                any_checking=any_checking,
+            )
+            + f'<div class="nc-cards">{"".join(cards)}</div>'
+            + '<p class="nc-footer-note">'
+            "Connecting a subscription does not give an assistant "
             "permission to use it. Access to each article is checked separately. "
             "Disconnecting keeps your saved articles.</p>"
-            f'<form method="post" action="{self.home}logout">'
-            "<button class=quiet>Sign out of Connections</button></form>"
         )
         return HTMLResponse(
             self.page(
                 body,
-                refresh=any(
+                refresh=any_checking
+                or any(
                     item["state"] in ("connecting", "saving", "recovering")
                     for item in statuses
                 ),
             ),
         )
 
-    def sharing_body(self, user, provider, status, *, snapshot=None, members=None):
+    def sharing_body(
+        self,
+        user,
+        provider,
+        status,
+        *,
+        snapshot=None,
+        members=None,
+        shared_health=None,
+    ):
         assert self.access is not None
         if snapshot is not None:
             row, offered, unavailable, admitted_ok = snapshot
@@ -984,26 +1382,51 @@ class Connections:
                         "The selected shared access was removed or changed. "
                         "Choose below."
                     )
-        choices = []
+
+        parts = [
+            '<div class="nc-sharing">',
+            '<section aria-label="Account selection">',
+            '<div class="nc-sharing-head">',
+            f'<p class="nc-sharing-summary" role="status">{html.escape(summary)}</p>',
+            "</div>",
+        ]
+        offer_rows: list[str] = []
         if not selected or selected["owner"] != user:
-            choices.append(
-                Offer(
-                    "My subscription",
-                    self.home + "choose",
-                    {
-                        "provider": provider,
-                        "owner": user,
-                        "selection_revision": row["revision"],
-                        "grant": "own",
-                    },
-                    "Use my subscription",
-                )
+            own_pill = render_pill(status["access_label"], status["access_tone"])
+            choose_own = action_form(
+                self.home + "choose",
+                {
+                    "provider": provider,
+                    "owner": user,
+                    "selection_revision": row["revision"],
+                    "grant": "own",
+                },
+                "Use my subscription",
+            )
+            offer_rows.append(
+                '<div class="nc-offer-row">'
+                '<div class="nc-offer-info">'
+                f'<p class="nc-offer-title">My subscription {own_pill}</p>'
+                "</div>"
+                f'<div class="nc-offer-actions">{choose_own}</div>'
+                "</div>"
             )
         for owner, grant in offered:
-            if selected != {"owner": owner, "grant": grant}:
-                choices.append(
-                    Offer(
-                        owner + "'s subscription",
+            owner_info = (
+                shared_health.get((owner, provider))
+                if shared_health is not None
+                else self._owner_access_summary(owner, provider)
+            )
+            owner_pill = (
+                render_pill(owner_info[1], owner_info[2])
+                if owner_info is not None
+                else ""
+            )
+            is_selected = selected == {"owner": owner, "grant": grant}
+            row_actions: list[str] = []
+            if not is_selected:
+                row_actions.append(
+                    action_form(
                         self.home + "choose",
                         {
                             "provider": provider,
@@ -1012,44 +1435,65 @@ class Connections:
                             "grant": grant,
                         },
                         "Use this subscription",
-                        "Read with their subscription; "
-                        "save articles privately to your own archive.",
                     )
                 )
-        body = selection_controls(summary, choices)
-        for owner, grant in offered:
-            body += action_form(
-                self.home + "leave",
-                {"provider": provider, "owner": owner, "grant": grant},
-                "Leave " + owner + "'s shared subscription"
-                if selected and selected["owner"] == owner
-                else "Decline access from " + owner,
+            row_actions.append(
+                action_form(
+                    self.home + "leave",
+                    {"provider": provider, "owner": owner, "grant": grant},
+                    "Leave " + owner + "'s shared subscription"
+                    if selected and selected["owner"] == owner
+                    else "Decline access from " + owner,
+                )
             )
+            offer_rows.append(
+                '<div class="nc-offer-row">'
+                '<div class="nc-offer-info">'
+                f'<p class="nc-offer-title">{html.escape(owner)}\'s subscription '
+                f"{owner_pill}</p>"
+                '<p class="nc-offer-detail">Read with their subscription; '
+                "save articles privately to your own archive.</p>"
+                "</div>"
+                f'<div class="nc-offer-actions">{"".join(row_actions)}</div>'
+                "</div>"
+            )
+        if offer_rows:
+            parts.append(f'<div class="nc-offer-list">{"".join(offer_rows)}</div>')
+        parts.append("</section>")
+
         if unavailable:
-            body += (
+            parts.append(
                 '<p role="alert">Some shared offers are unavailable. '
                 "Other controls remain usable.</p>"
             )
-        body += (
-            "<details><summary>Shared with</summary><p>Share your own publisher "
-            "sign-in with an existing user. They choose when to use it and cannot "
-            "reconnect, disconnect or share it further. Activity may appear in the "
-            "publisher account. Stopping sharing keeps articles they already saved.</p>"
+
+        active_grant_count = len(row["grants"])
+        shared_label = (
+            f"Shared with ({active_grant_count})"
+            if active_grant_count
+            else "Shared with"
+        )
+        parts.append(
+            f"<details><summary>{html.escape(shared_label)}</summary>"
+            "<p>Share your own publisher sign-in with an existing user. They choose "
+            "when to use it and cannot reconnect, disconnect or share it further. "
+            "Activity may appear in the publisher account. Stopping sharing keeps "
+            "articles they already saved.</p>"
         )
         if members is None:
             members = self.access.users() - {user}
+        member_rows: list[str] = []
         for member in sorted(members | row["grants"].keys()):
             grant = row["grants"].get(member)
-            body += "<p>" + html.escape(member) + "</p>"
             if grant:
-                body += action_form(
+                btn = action_form(
                     self.home + "unshare",
                     {"provider": provider, "member": member, "grant": grant},
                     "Stop sharing",
                     danger=True,
                 )
             elif status["state"] == "connected":
-                body += action_form(
+                btn = action_form(
                     self.home + "share",
                     {
                         "provider": provider,
@@ -1059,9 +1503,19 @@ class Connections:
                     },
                     "Share my subscription",
                 )
-        if not members:
-            body += "<p>No other registered users are available.</p>"
-        return body + "</details>"
+            else:
+                btn = '<span class="muted">Connect first to share</span>'
+            member_rows.append(
+                '<div class="nc-member-row">'
+                f'<p class="nc-member-name">{html.escape(member)}</p>'
+                f"{btn}</div>"
+            )
+        if member_rows:
+            parts.append(f'<div class="nc-members">{"".join(member_rows)}</div>')
+        elif not members:
+            parts.append("<p>No other registered users are available.</p>")
+        parts.append("</details></div>")
+        return "".join(parts)
 
     async def sharing_action(self, request):
         user = self.user(request)
@@ -1315,6 +1769,53 @@ class Connections:
             )
         return RedirectResponse(self.home, status_code=303)
 
+    async def check_action(self, request):
+        user = self.user(request)
+        if not user or not self.auth.origin_ok(request):
+            return self.auth.refused(request)
+        action = request.url.path.rsplit("/", 1)[1]
+        payload = bytearray()
+        async for chunk in request.stream():
+            payload.extend(chunk)
+            if len(payload) > 4096:
+                return Response(status_code=413)
+        if (
+            request.headers.get("content-type", "").split(";", 1)[0]
+            != "application/x-www-form-urlencoded"
+        ):
+            return Response(status_code=400)
+        if action == "check-all":
+            if payload:
+                return Response(status_code=400)
+
+            def start_all():
+                for item in self.statuses(user):
+                    if item["state"] == "connected":
+                        self.start_check(user, item["provider"])
+
+            try:
+                await self.adapters[user].dispatcher.run(start_all)
+            except (NewsclipError, OSError, ValueError):
+                return Response(status_code=409)
+            return RedirectResponse(self.home, status_code=303)
+        try:
+            values = parse_qs(payload.decode(), strict_parsing=True, max_num_fields=2)
+            if set(values) != {"provider"} or len(values["provider"]) != 1:
+                raise ValueError("provider")
+            provider = values["provider"][0]
+            selected = self.adapters[user]._service_ready()._registry.get(provider)
+            if selected.login_recipe is None:
+                raise ValueError("provider")
+        except (ValueError, UnicodeError, NewsclipError):
+            return Response(status_code=400)
+        try:
+            await self.adapters[user].dispatcher.run(
+                lambda: self.start_check(user, provider)
+            )
+        except (NewsclipError, OSError, ValueError):
+            return Response(status_code=409)
+        return RedirectResponse(self.home + "#" + provider, status_code=303)
+
     def routes(self):
         routes = [
             Route("/connections/", self.index),
@@ -1327,6 +1828,10 @@ class Connections:
             *(
                 Route("/connections/" + action, self.action, methods=["POST"])
                 for action in ("start", "cancel", "disconnect")
+            ),
+            *(
+                Route("/connections/" + action, self.check_action, methods=["POST"])
+                for action in ("check", "check-all")
             ),
         ]
 

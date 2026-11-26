@@ -1,24 +1,14 @@
 {
   "schema": 1,
-  "version": "2.1.7",
+  "version": "2.2.0",
   "state": {
-    "change": "compatible",
-    "from": "browser-sessions sqlite v1 (signin-window 0.8.4)",
-    "to": "browser-sessions sqlite v2 with revocations and session_families (signin-window 0.10.0)",
-    "rollback_versions": [
-      "2.1.6"
-    ]
+    "change": "none",
+    "from": "browser-sessions sqlite v2 with revocations and session_families (signin-window 0.10.0)",
+    "to": "browser-sessions sqlite v2 with revocations and session_families (signin-window 0.10.0)"
   },
   "configuration": {
     "change": "none",
     "from": null,
     "to": null
-  },
-  "rollback_check": {
-    "command": [
-      "make",
-      "rollback-check"
-    ],
-    "receipt": ".artifacts/rollback-check.json"
   }
 }

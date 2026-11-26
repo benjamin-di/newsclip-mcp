@@ -12,13 +12,23 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends ca-certificates curl dumb-init libxtst6 xvfb \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY pyproject.toml uv.lock README.md LICENSE NOTICE ./
-RUN uv sync --locked --extra local --no-dev --extra mcp --extra signin --no-install-project \
- && patchright install --with-deps chromium \
- && /app/.venv/bin/python -c "from pathlib import Path; import patchright; p = Path(patchright.__file__).parent / 'driver' / 'node'; p.unlink(); p.symlink_to('/usr/local/bin/browser-node')" \
- && rm -rf /var/lib/apt/lists/* \
+ARG PATCHRIGHT_VERSION=1.61.2
+ARG PATCHRIGHT_AMD64_SHA256=545bdf2c0bb5f9ad78ab315e91c8c2990cc6a702e7f18650b71fe1071049b5c1
+ARG PATCHRIGHT_ARM64_SHA256=1824da30cf6560749bc1bb4a7f002fec325d5b709090dd7c8c1b643899331cee
+RUN uv venv /tmp/patchright-install \
+ && printf 'patchright==%s --hash=sha256:%s --hash=sha256:%s\n' \
+      "$PATCHRIGHT_VERSION" "$PATCHRIGHT_AMD64_SHA256" "$PATCHRIGHT_ARM64_SHA256" \
+      > /tmp/patchright-install/requirements.txt \
+ && uv pip install --no-cache --python /tmp/patchright-install/bin/python --no-deps --require-hashes \
+      -r /tmp/patchright-install/requirements.txt \
+ && /tmp/patchright-install/bin/patchright install --with-deps chromium \
+ && rm -rf /tmp/patchright-install /var/lib/apt/lists/* \
  && groupadd --gid 1000 newsclip \
  && useradd --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin newsclip
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --extra local --no-dev --extra mcp --extra signin --no-install-project \
+ && /app/.venv/bin/python -c "from pathlib import Path; import patchright; p = Path(patchright.__file__).parent / 'driver' / 'node'; p.unlink(); p.symlink_to('/usr/local/bin/browser-node')"
+COPY README.md LICENSE NOTICE ./
 COPY src ./src
 COPY scripts/embed-build-identity.py /tmp/embed-build-identity.py
 COPY scripts/check-build-identity.py /tmp/check-build-identity.py

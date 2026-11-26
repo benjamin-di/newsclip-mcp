@@ -3,6 +3,19 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.2.0] - 2026-11-26
+
+### Added
+
+- Surface real derived subscription access health (`Working`, `Needs check`, `Degraded`, `Action needed`, `Paused`, `Checking…`, `Not connected`, `Disconnected`) on `/connections/` and `/connections/status`, folding in keeper renewal outcomes, recovery state, and shared-owner access health without exposing private incident or diagnostic identifiers.
+- Add live `Check access` (`POST /connections/check`) and `Check all` (`POST /connections/check-all`) actions that run bounded background `session_checkpoint` verification, refresh `verified_at` on disk when access succeeds, and update the page automatically via `signin-window` polling.
+- Redesign `/connections/` with a modern, accessible light/dark UI featuring an at-a-glance access health overview strip, publisher monograms, color-coded status pills and callouts, relative + UTC verification timestamps, and structured sharing and account selection cards.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.1.7; session files, connection controls, sharing records, and archive formats are unchanged.
+
 ## [2.1.7] - 2026-11-24
 
 ### Changed

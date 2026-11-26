@@ -191,6 +191,17 @@ class ServingSessions:
             provider, account_key, generation_id=generation_id
         )
 
+    def record_verified(
+        self,
+        provider: str,
+        account_key: str = "default",
+        *,
+        generation_id: UUID | None = None,
+    ) -> SessionArtifact | None:
+        return self._store.record_verified(
+            provider, account_key, generation_id=generation_id
+        )
+
 
 class SessionStore:
     """Own one versioned session file per provider/account under an OS lock."""
@@ -399,6 +410,47 @@ class SessionStore:
                 prior_artifact=artifact,
                 reason_code="account_alert",
             )
+
+    def record_verified(
+        self,
+        provider: str,
+        account_key: str = "default",
+        *,
+        generation_id: UUID | None = None,
+    ) -> SessionArtifact | None:
+        """Record a fresh verification timestamp for the current verified generation.
+
+        Best-effort: never fails a passing live proof if persistence is full,
+        and never overwrites a different generation or non-verified status.
+        """
+
+        self._recipe(provider)
+        with self._lock(provider, account_key):
+            stored = self._load_locked(provider, account_key)
+            if (
+                stored is None
+                or stored.status is not SessionStatus.VERIFIED
+                or stored.artifact is None
+            ):
+                return None
+            if (
+                generation_id is not None
+                and stored.artifact.generation_id != generation_id
+            ):
+                return None
+            proven_at = self._now()
+            if proven_at == stored.artifact.verified_at:
+                return stored.artifact
+            dated = stored.artifact.model_copy(update={"verified_at": proven_at})
+            try:
+                self._write(
+                    provider,
+                    account_key,
+                    StoredSession(status=SessionStatus.VERIFIED, artifact=dated),
+                )
+            except PersistenceError:
+                return stored.artifact
+            return dated
 
     def explicit_login(
         self,

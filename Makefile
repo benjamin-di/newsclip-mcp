@@ -7,6 +7,7 @@ check: check-runtime-lock
 	uv run --locked --extra local mypy src/newsclip
 	uv run --locked --extra local pytest -q -m "not live"
 	git diff --check
+	@if [ -f publish/config.toml ] && command -v publish-public >/dev/null 2>&1; then publish-public --check-head .; fi
 
 rollback-check:
 	uv run --locked --extra local python scripts/rollback-check.py

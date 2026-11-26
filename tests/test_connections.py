@@ -709,3 +709,250 @@ def test_start_new_sign_in_layout_429_and_stuck_teardown(accounts, tmp_path):
             == 409
         )
         assert "Saving connection" in client.get("/connections/").text
+
+
+def test_access_status_reflects_fresh_stale_degraded_and_operator_action(
+    accounts, tmp_path
+):
+    from datetime import timedelta
+
+    from newsclip.keeper_outcomes import KeeperOutcome, KeeperOutcomeStore
+    from newsclip.models import TerminalFailure
+
+    app, _, _ = make_app(accounts, tmp_path)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        browser_login(app, client, "alice")
+        portal = app.state.connections
+        service = portal.adapters["alice"]._service_ready()
+        service._wall_clock = lambda: NOW
+        selected = store(portal.controls["alice"].root.parent)
+        service._sessions = selected
+        outcomes = KeeperOutcomeStore(portal.controls["alice"].root.parent)
+        service._keeper_outcomes = outcomes
+
+        # 1. Fresh verified session -> Working
+        candidate, proof = material()
+        selected.promote_browser_session(candidate, proof, expected_generation=None)
+        status = client.get("/connections/status").json()["providers"][0]
+        assert status["access_status"] == "working"
+        assert status["health"] == "fresh"
+        page = client.get("/connections/").text
+        assert "Working" in page
+        assert "Check access" in page
+        assert "Check all" in page
+
+        # 2. Stale verified session (24h old) -> Needs check
+        stale_artifact = candidate.model_copy(
+            update={"verified_at": NOW - timedelta(hours=24)}
+        )
+        selected._write(
+            "fixture",
+            "default",
+            StoredSession(status=SessionStatus.VERIFIED, artifact=stale_artifact),
+        )
+        # Provide a real verify() on the fixture login_recipe for live checkpoint.
+        from newsclip.models import AccessState, SessionVerification
+
+        service._registry.get("fixture").login_recipe.verify = lambda client, session: (
+            SessionVerification(
+                verified=True,
+                access_state=AccessState.FULL,
+                reason="full_article",
+                verified_at=NOW,
+            )
+        )
+        status = client.get("/connections/status").json()["providers"][0]
+        assert status["access_status"] == "stale"
+        assert status["health"] == "stale"
+        assert "Needs check" in client.get("/connections/").text
+
+        # 3. Degraded session (3 consecutive renewal failures) -> Degraded
+        outcomes._write(
+            KeeperOutcome(
+                provider="fixture",
+                action="renewal_failed",
+                reason_code="paid_probe_failed",
+                recorded_at=NOW,
+                consecutive_renewal_failures=3,
+                max_age_hours=12.0,
+                incident_id="incident-" + "a" * 24,
+            )
+        )
+        status = client.get("/connections/status").json()["providers"][0]
+        assert status["access_status"] == "degraded"
+        assert status["health"] == "degraded"
+        assert status["consecutive_renewal_failures"] == 3
+        page = client.get("/connections/").text
+        assert "Degraded" in page
+        assert "Automatic renewal failed 3 times" in page
+
+        # 4. Operator action -> Action needed
+        selected._write(
+            "fixture",
+            "default",
+            StoredSession(
+                status=SessionStatus.OPERATOR_ACTION,
+                last_failure=TerminalFailure.ACCOUNT_ALERT,
+                failure_reason_code="account_alert",
+            ),
+        )
+        status = client.get("/connections/status").json()["providers"][0]
+        assert status["access_status"] == "action_required"
+        page = client.get("/connections/").text
+        assert "Action needed" in page
+        assert "account alert" in page
+
+
+def test_live_check_access_updates_status_and_handles_failure_and_inconclusive(
+    accounts, tmp_path
+):
+    from datetime import timedelta
+
+    from newsclip.errors import ProviderTransportError
+
+    clock = [NOW.timestamp()]
+    app, _, _ = make_app(accounts, tmp_path)
+    origin = {"origin": "http://127.0.0.1"}
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        browser_login(app, client, "alice")
+        portal = app.state.connections
+        portal.clock = lambda: clock[0]
+        service = portal.adapters["alice"]._service_ready()
+        service._wall_clock = lambda: NOW
+        selected = store(portal.controls["alice"].root.parent)
+        service._sessions = selected
+        candidate, proof = material()
+        selected.promote_browser_session(candidate, proof, expected_generation=None)
+        # Start stale so a passing live check proves verified_at refresh.
+        stale_artifact = candidate.model_copy(
+            update={"verified_at": NOW - timedelta(hours=24)}
+        )
+        selected._write(
+            "fixture",
+            "default",
+            StoredSession(status=SessionStatus.VERIFIED, artifact=stale_artifact),
+        )
+        # Provide a real verify() on the fixture login_recipe for live checkpoint.
+        from newsclip.models import AccessState, SessionVerification
+
+        service._registry.get("fixture").login_recipe.verify = lambda client, session: (
+            SessionVerification(
+                verified=True,
+                access_state=AccessState.FULL,
+                reason="full_article",
+                verified_at=NOW,
+            )
+        )
+
+        # 1. Passing live check refreshes verified_at -> Working
+        resp = client.post(
+            "/connections/check",
+            data={"provider": "fixture"},
+            headers=origin,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/connections/#fixture"
+        portal.wait_checks()
+        status = client.get("/connections/status").json()["providers"][0]
+        assert status["access_status"] == "working"
+        assert status["last_check"]["state"] == "passed"
+        assert "Live check passed" in client.get("/connections/").text
+
+        # 2. Inconclusive live check keeps session intact
+        clock[0] += 60
+        orig_checkpoint = service.session_checkpoint
+
+        def inconclusive_checkpoint(provider):
+            raise ProviderTransportError("temporary timeout")
+
+        service.session_checkpoint = inconclusive_checkpoint
+        assert (
+            client.post(
+                "/connections/check-all",
+                data="",
+                headers={
+                    **origin,
+                    "content-type": "application/x-www-form-urlencoded",
+                },
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+        portal.wait_checks()
+        status = client.get("/connections/status").json()["providers"][0]
+        assert status["state"] == "connected"
+        assert status["last_check"]["state"] == "inconclusive"
+        assert "Live check was inconclusive" in client.get("/connections/").text
+
+        # 3. Failing live check surfaces failure banner
+        clock[0] += 60
+
+        def failed_checkpoint(provider):
+            selected.mark_required(provider)
+            raise SessionRequiredError("session expired")
+
+        service.session_checkpoint = failed_checkpoint
+        assert (
+            client.post(
+                "/connections/check",
+                data={"provider": "fixture"},
+                headers=origin,
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+        portal.wait_checks()
+        status = client.get("/connections/status").json()["providers"][0]
+        assert status["state"] == "needs_signin"
+        assert status["last_check"]["state"] == "failed"
+        assert "Live check failed" in client.get("/connections/").text
+        service.session_checkpoint = orig_checkpoint
+
+
+def test_shared_subscription_card_shows_owner_access_health_without_private_ids(
+    accounts, tmp_path
+):
+    from html import unescape
+
+    from newsclip.keeper_outcomes import KeeperOutcome, KeeperOutcomeStore
+
+    app, _, _ = make_app(accounts, tmp_path)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        portal = app.state.connections
+        alice_service = portal.adapters["alice"]._service_ready()
+        alice_service._wall_clock = lambda: NOW
+        selected = store(portal.controls["alice"].root.parent)
+        candidate, proof = material()
+        selected.promote_browser_session(candidate, proof, expected_generation=None)
+        alice_service._sessions = selected
+        outcomes = KeeperOutcomeStore(portal.controls["alice"].root.parent)
+        alice_service._keeper_outcomes = outcomes
+
+        access = portal.access
+        access.share("alice", "fixture", "bob", None)
+        row, offers, _ = access.view("bob", "fixture")
+        grant = dict(offers)["alice"]
+        access.choose("bob", "fixture", "alice", row["revision"], grant)
+
+        browser_login(app, client, "bob")
+        page = unescape(client.get("/connections/").text)
+        assert "Using alice's subscription (Working)" in page
+
+        # Degrade Alice's subscription with a private incident ID; Bob sees Degraded
+        # without ever seeing Alice's private incident identifier.
+        private_incident = "incident-" + "b" * 24
+        outcomes._write(
+            KeeperOutcome(
+                provider="fixture",
+                action="renewal_failed",
+                reason_code="paid_probe_failed",
+                recorded_at=NOW,
+                consecutive_renewal_failures=3,
+                max_age_hours=12.0,
+                incident_id=private_incident,
+            )
+        )
+        page = unescape(client.get("/connections/").text)
+        assert "Using alice's subscription (Degraded)" in page
+        assert private_incident not in page
