@@ -870,7 +870,7 @@ def test_live_check_access_updates_status_and_handles_failure_and_inconclusive(
         assert (
             client.post(
                 "/connections/check-all",
-                data="",
+                content=b"",
                 headers={
                     **origin,
                     "content-type": "application/x-www-form-urlencoded",

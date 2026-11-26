@@ -679,8 +679,10 @@ class Connections:
 
         Never exposes private incident IDs, diagnostic IDs or recovery details.
         """
-        adapter = self.adapters.get(owner)
-        controls = self.controls.get(owner)
+        adapters = getattr(self, "adapters", None)
+        controls_map = getattr(self, "controls", None)
+        adapter = adapters.get(owner) if adapters is not None else None
+        controls = controls_map.get(owner) if controls_map is not None else None
         if adapter is None or controls is None:
             return None
         try:
@@ -1392,7 +1394,11 @@ class Connections:
         ]
         offer_rows: list[str] = []
         if not selected or selected["owner"] != user:
-            own_pill = render_pill(status["access_label"], status["access_tone"])
+            own_pill = (
+                render_pill(status["access_label"], status["access_tone"])
+                if "access_label" in status and "access_tone" in status
+                else ""
+            )
             choose_own = action_form(
                 self.home + "choose",
                 {

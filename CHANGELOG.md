@@ -3,6 +3,17 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.2.1] - 2026-11-26
+
+### Fixed
+
+- Guard `_owner_access_summary` and `sharing_body` in `Connections` when called directly without initialized `adapters`/`controls` or derived `access_label`/`access_tone` fields, keeping direct unit callers compatible.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.2.0 and 2.1.7; no storage or configuration changes.
+
 ## [2.2.0] - 2026-11-26
 
 ### Added
