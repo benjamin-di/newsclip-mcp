@@ -10,6 +10,7 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, MutableMapping, Sequence
 from contextlib import suppress
@@ -119,6 +120,7 @@ class _DisplayLease:
 
 
 _ACTIVE: SurfaceHandle | None = None
+_ACTIVE_LOCK = threading.Lock()
 
 
 def _stop_host_xvfb(process: subprocess.Popen[bytes]) -> None:
@@ -294,29 +296,32 @@ def ensure_virtual_display(
         environ.pop("DISPLAY", None)
 
     global _ACTIVE
-    if _ACTIVE is not None and display_is_usable(_ACTIVE.display):
-        environ["DISPLAY"] = _ACTIVE.display
+    with _ACTIVE_LOCK:
+        if _ACTIVE is not None and display_is_usable(_ACTIVE.display):
+            environ["DISPLAY"] = _ACTIVE.display
+            environ["NEWSCLIP_VIRTUAL_DISPLAY"] = "1"
+            environ["NEWSCLIP_DENY_SYSTEM_DISPLAY"] = "1"
+            environ["NEWSCLIP_TIMING_SURFACE"] = _ACTIVE.mode.value
+            return _ACTIVE
+        if _ACTIVE is not None:
+            stale = _ACTIVE
+            _ACTIVE = None
+            stale.close()
+        handle = _start_host_xvfb(
+            _display_number(environ) if "NEWSCLIP_XVFB_DISPLAY" in environ else None,
+            environment=environ,
+        )
+        if handle is None:
+            raise BrowserRuntimeError(
+                InfrastructureCategory.VIRTUAL_DISPLAY_UNAVAILABLE
+            )
+        environ["DISPLAY"] = handle.display
         environ["NEWSCLIP_VIRTUAL_DISPLAY"] = "1"
         environ["NEWSCLIP_DENY_SYSTEM_DISPLAY"] = "1"
-        environ["NEWSCLIP_TIMING_SURFACE"] = _ACTIVE.mode.value
-        return _ACTIVE
-    if _ACTIVE is not None:
-        stale = _ACTIVE
-        _ACTIVE = None
-        stale.close()
-    handle = _start_host_xvfb(
-        _display_number(environ) if "NEWSCLIP_XVFB_DISPLAY" in environ else None,
-        environment=environ,
-    )
-    if handle is None:
-        raise BrowserRuntimeError(InfrastructureCategory.VIRTUAL_DISPLAY_UNAVAILABLE)
-    environ["DISPLAY"] = handle.display
-    environ["NEWSCLIP_VIRTUAL_DISPLAY"] = "1"
-    environ["NEWSCLIP_DENY_SYSTEM_DISPLAY"] = "1"
-    environ["NEWSCLIP_TIMING_SURFACE"] = handle.mode.value
-    _ACTIVE = handle
-    atexit.register(handle.close)
-    return handle
+        environ["NEWSCLIP_TIMING_SURFACE"] = handle.mode.value
+        _ACTIVE = handle
+        atexit.register(handle.close)
+        return handle
 
 
 def docker_cli_usable() -> bool:

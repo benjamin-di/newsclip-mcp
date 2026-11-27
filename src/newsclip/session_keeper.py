@@ -651,6 +651,9 @@ class CredentialBudget(AttemptBudget):
         return self.root / f"{provider}.json"
 
 
+_CONNECTION_BLOCKERS = frozenset({"connection_interactive", "connection_disconnected"})
+
+
 class SessionKeeper:
     """Decide and perform one bounded upkeep step for one provider."""
 
@@ -1088,6 +1091,9 @@ class SessionKeeper:
             and getattr(hold, "action", None) is GuardAction.INCIDENT_REVIEW_REQUIRED
             and not pending.reconciliation_started
         ):
+            blocked = self._connection_blocker_result(provider)
+            if blocked is not None:
+                return blocked
             # A queued request must not suppress the existing bounded canary
             # that can clear this hold. The 30-second watcher never runs it.
             result = self._incident_review_canary(provider)
@@ -1136,6 +1142,9 @@ class SessionKeeper:
             hold is None
             or getattr(hold, "action", None) not in SESSION_EVIDENCE_ACTIONS
         ):
+            blocked = self._connection_blocker_result(provider)
+            if blocked is not None:
+                return blocked
             return self._defense_canary(provider)
         # Session-evidence remedies proceed through the normal durable claim:
         # it preserves the request's warm-only vs credential-required boundary.
@@ -1296,6 +1305,9 @@ class SessionKeeper:
             # "the keeper may act on this".
             action = getattr(hold, "action", None)
             if action is GuardAction.INCIDENT_REVIEW_REQUIRED:
+                blocked = self._connection_blocker_result(provider)
+                if blocked is not None:
+                    return blocked
                 # R9: renewal stays blocked dead, but the hold permits the
                 # one daily canary that could produce the contradicting
                 # evidence a content incident can never otherwise get — a
@@ -1319,6 +1331,9 @@ class SessionKeeper:
                 hold is None
                 or getattr(hold, "action", None) not in SESSION_EVIDENCE_ACTIONS
             ):
+                blocked = self._connection_blocker_result(provider)
+                if blocked is not None:
+                    return blocked
                 return self._defense_canary(provider)
             # A previous read-only canary proved that authority needs renewal.
             # On a later eligible cycle, keep the ordinary warm-first remedy
@@ -1395,6 +1410,35 @@ class SessionKeeper:
             status=status,
             allow_credential_mint=allow_credential_mint,
         )
+
+    def _connection_blocker_result(self, provider: str) -> KeeperResult | None:
+        blocker_fn = getattr(self._sessions, "maintenance_blocker", None)
+        if blocker_fn is not None:
+            reason = blocker_fn(provider)
+            if reason in _CONNECTION_BLOCKERS:
+                return self._result(
+                    provider=provider,
+                    action=KeeperAction.OPERATOR_ACTION_REQUIRED,
+                    status=SessionStatus.OPERATOR_ACTION,
+                    reason_code=reason,
+                )
+            return None
+        requires_fn = getattr(self._sessions, "requires_session_for_provider", None)
+        if requires_fn is None or not requires_fn(provider):
+            return None
+        health = self._sessions.session_status(provider)
+        reason = _reason_code_value(health.failure_reason_code)
+        if (
+            health.status is SessionStatus.OPERATOR_ACTION
+            and reason in _CONNECTION_BLOCKERS
+        ):
+            return self._result(
+                provider=provider,
+                action=KeeperAction.OPERATOR_ACTION_REQUIRED,
+                status=SessionStatus.OPERATOR_ACTION,
+                reason_code=reason,
+            )
+        return None
 
     def _defense_canary(self, provider: str) -> KeeperResult:
         result = self._guard.run_incident_review_canary(

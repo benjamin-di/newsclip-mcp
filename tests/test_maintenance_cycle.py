@@ -417,3 +417,20 @@ def test_current_hold_projection_is_closed_and_independent_of_completed_recovery
             project_verdict({"current_hold": {**hold, key: "SYNTHETIC_SECRET"}}) == {}
         )
     assert project_verdict({"recovery": {"current_hold": hold}}) == {"recovery": {}}
+
+
+def test_maintenance_cycle_enforces_720_hour_max_age_cap(tmp_path):
+    with pytest.raises(ValueError, match="invalid bounded maintenance configuration"):
+        run_maintenance_cycle(["ft"], root=tmp_path, max_age_hours=721)
+
+    called = []
+
+    def stub_runner(arguments, *, timeout, lock_fd):
+        called.append(arguments)
+        return 0, {"provider": "ft", "action": "fresh", "overall_state": "healthy"}
+
+    result = run_maintenance_cycle(
+        ["ft"], root=tmp_path, max_age_hours=720, runner=stub_runner
+    )
+    assert not result.needs_attention
+    assert called and "720" in called[0]

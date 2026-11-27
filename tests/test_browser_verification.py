@@ -8,6 +8,7 @@ import pytest
 
 from newsclip.browser_runtime import ObservedNavigation
 from newsclip.browser_verification import (
+    MainDocumentResponse,
     capture_verification_fetch,
     verification_fetch_from_snapshot,
 )
@@ -252,3 +253,48 @@ def test_recipe_verification_rejects_teaser_and_short_body(
 
     assert verification.verified is False
     assert verification.reason == reason
+
+
+def test_main_document_response_ignores_intermediate_redirect_responses() -> None:
+    listeners: dict[str, list[object]] = {}
+    main_frame = SimpleNamespace(url=ARTICLE_URL)
+
+    def on(name: str, handler: object) -> None:
+        listeners.setdefault(name, []).append(handler)
+
+    def remove_listener(name: str, handler: object) -> None:
+        if name in listeners and handler in listeners[name]:
+            listeners[name].remove(handler)
+
+    page = SimpleNamespace(
+        url=ARTICLE_URL,
+        main_frame=main_frame,
+        on=on,
+        remove_listener=remove_listener,
+    )
+    redirect_response = SimpleNamespace(
+        frame=main_frame,
+        request=SimpleNamespace(is_navigation_request=lambda: True),
+        status=302,
+        url=ARTICLE_URL,
+    )
+    final_response = SimpleNamespace(
+        frame=main_frame,
+        request=SimpleNamespace(is_navigation_request=lambda: True),
+        status=200,
+        url=ARTICLE_URL,
+    )
+
+    with MainDocumentResponse(page) as document:
+        for handler in list(listeners.get("response", ())):
+            handler(redirect_response)  # type: ignore[operator]
+        for handler in list(listeners.get("framenavigated", ())):
+            handler(main_frame)  # type: ignore[operator]
+        assert document.current is None
+        assert document.unmatched_commit is True
+
+        for handler in list(listeners.get("response", ())):
+            handler(final_response)  # type: ignore[operator]
+        assert document.current is final_response
+        assert document.unmatched_commit is False
+        assert document.select(final_response) is final_response

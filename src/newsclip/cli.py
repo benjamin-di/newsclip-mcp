@@ -447,7 +447,7 @@ def maintenance_cycle(
     ),
     mode: str = typer.Option("keep", "--mode", help="keep or check"),
     timeout_seconds: int = typer.Option(900, "--timeout-seconds", min=1, max=86400),
-    max_age_hours: float = typer.Option(12, "--max-age-hours", min=0.0001, max=8760),
+    max_age_hours: float = typer.Option(12, "--max-age-hours", min=0.0001, max=720),
     check_interval_seconds: int = typer.Option(
         86400, "--check-interval-seconds", min=60
     ),

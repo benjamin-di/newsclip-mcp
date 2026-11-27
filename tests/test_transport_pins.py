@@ -453,3 +453,22 @@ def test_rot_of_a_different_profile_opens_a_fresh_sweep(tmp_path: Path) -> None:
     assert reopened.exhausted_profiles == ()
     assert reopened.pool_exhausted_at is None
     assert reopened.rot_profile == "chrome131_android"
+
+
+def test_next_candidate_skips_retired_in_flight_candidate_profile() -> None:
+    from newsclip.models import HTTP_IMPERSONATION_PROFILES
+    from newsclip.transport_pins import TransportPinState, next_candidate
+
+    state = TransportPinState(
+        provider="reuters",
+        rot_observed_at=NOW,
+        rot_profile="safari2601",
+        candidate_profile="retired_chrome_99",
+        candidate_passes=1,
+    )
+
+    candidate = next_candidate(state, declared_profile="safari2601")
+
+    assert candidate is not None
+    assert candidate != "retired_chrome_99"
+    assert candidate in HTTP_IMPERSONATION_PROFILES

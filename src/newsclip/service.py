@@ -518,7 +518,7 @@ class NewsclipService:
             manager = self._session_manager()
             if cookie_payload is not None:
                 if (
-                    provider.capabilities.retrieval_transport == "browser"
+                    self.requires_browser_for_provider(provider_key)
                     and before_browser is not None
                 ):
                     before_browser()
@@ -685,6 +685,15 @@ class NewsclipService:
                 "session has not reached the required checkpoint age"
             )
         return checkpoint
+
+    def maintenance_blocker(self, provider_key: str) -> str | None:
+        if not self.requires_session_for_provider(provider_key):
+            return None
+        controls = getattr(self._session_manager(), "connection_controls", None)
+        if controls is None:
+            return None
+        result = controls.maintenance_blocker(provider_key)
+        return result if isinstance(result, str) else None
 
     def session_reset(self, provider_key: str) -> SessionHealth:
         self._session_provider(provider_key)
@@ -1147,20 +1156,13 @@ class NewsclipService:
                 evidence,
             )
         if fetch.http_status == 401:
-            incident_id = self._record_retrieval_incident(
+            return self._provider_check_defended(
                 provider,
-                TimingOperation.GET,
+                page,
                 fetch,
                 assessment,
-            )
-            return _provider_check_assessed_result(
-                provider.key,
                 evidence,
-                failure=ProviderCheckFailure.PROVIDER_DEFENSE,
-                http_status=fetch.http_status,
-                search_result_count=len(page.results),
                 session_disposition=disposition,
-                incident_id=incident_id,
             )
         incident_id = self._record_retrieval_incident(
             provider,
@@ -1270,6 +1272,8 @@ class NewsclipService:
         fetch: RawFetch,
         assessment: ArticleAssessment,
         evidence: ContentAssessmentEvidence,
+        *,
+        session_disposition: SessionDisposition | None = None,
     ) -> ProviderCheckResult:
         """Record a retrieval-leg defense observation and its capsule."""
 
@@ -1286,6 +1290,7 @@ class NewsclipService:
             failure=ProviderCheckFailure.PROVIDER_DEFENSE,
             http_status=fetch.http_status,
             search_result_count=len(page.results),
+            session_disposition=session_disposition,
             incident_id=incident_id,
         )
 

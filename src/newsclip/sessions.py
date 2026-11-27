@@ -308,7 +308,7 @@ class SessionStore:
             update={"verified_at": verification.verified_at}
         )
         with self._lock(candidate.provider, candidate.account_key):
-            current = self._load(candidate.provider, candidate.account_key)
+            current = self._load_locked(candidate.provider, candidate.account_key)
             generation = (
                 current.artifact.generation_id if current and current.artifact else None
             )

@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from pydantic import HttpUrl
 
 from ..articles import parse_aware_datetime
+from ..assessment import search_status_failure
 from ..configured_provider import ConfiguredProvider, normalize_url, provider_article_id
 from ..contracts import HttpClient
 from ..errors import ProviderContractError, ProviderTransportError
@@ -230,7 +231,10 @@ def _compose_document(
 
 def _validate_api_response(fetch: RawFetch) -> None:
     if not 200 <= fetch.http_status < 300:
-        raise ProviderTransportError(f"provider API returned HTTP {fetch.http_status}")
+        raise ProviderTransportError(
+            f"provider API returned HTTP {fetch.http_status}",
+            category=search_status_failure(fetch.http_status),
+        )
     if len(fetch.raw_html) > _MAX_RESPONSE_BYTES:
         raise ProviderTransportError("provider API response exceeded the size limit")
     media_type = (fetch.content_type or "").partition(";")[0].strip().lower()

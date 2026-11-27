@@ -286,3 +286,20 @@ def test_search_page_counts_undated_results_withheld_by_date_bound() -> None:
     assert bounded.undated_excluded_count == 1
     assert len(unbounded.results) == 2
     assert unbounded.undated_excluded_count == 0
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_category"),
+    [
+        (429, "rate_limited"),
+        (503, "provider_error"),
+    ],
+)
+def test_search_non_2xx_classifies_transport_failure_category(
+    status: int, expected_category: str
+) -> None:
+    http = ApiHttp()
+    http.status = status
+    with pytest.raises(ProviderTransportError) as caught:
+        GuardianProvider().search(http, None, "ECB", SearchFilters())
+    assert caught.value.category.value == expected_category

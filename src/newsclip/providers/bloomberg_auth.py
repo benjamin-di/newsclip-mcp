@@ -49,7 +49,13 @@ from ..challenge_resolver import (
     ChallengeResolver,
 )
 from ..challenges import ChallengeInfrastructureError
-from ..contracts import AuthBrowserSession, LoginRecipe, SecretFiller
+from ..contracts import (
+    AuthBrowserSession,
+    BrowserSession,
+    LoginRecipe,
+    SecretField,
+    SecretFiller,
+)
 from ..extraction import TrafilaturaExtractor
 from ..identity.google import (
     GoogleIdentityConfig,
@@ -166,6 +172,56 @@ class _CallbackRetry:
         return self.exit_reason is IdentityExitReason.CALLBACK_COMPLETE
 
 
+class _LazyCredentialFiller:
+    """Resolve the configured credential filler on first secret delivery."""
+
+    def __init__(self) -> None:
+        self._filler: SecretFiller | None = None
+
+    def _resolve(self) -> SecretFiller:
+        if self._filler is None:
+            self._filler = credential_filler()
+        return self._filler
+
+    def fill(
+        self,
+        browser: BrowserSession,
+        *,
+        secret_ref: str,
+        field: SecretField,
+        selectors: tuple[str, ...],
+        allowed_origins: frozenset[str],
+        all_visible: bool = False,
+    ) -> None:
+        self._resolve().fill(
+            browser,
+            secret_ref=secret_ref,
+            field=field,
+            selectors=selectors,
+            allowed_origins=allowed_origins,
+            all_visible=all_visible,
+        )
+
+    def click_matching_choice(
+        self,
+        browser: BrowserSession,
+        *,
+        secret_ref: str,
+        field: SecretField,
+        selectors: tuple[str, ...],
+        excluded_text: tuple[str, ...],
+        allowed_origins: frozenset[str],
+    ) -> bool:
+        return self._resolve().click_matching_choice(
+            browser,
+            secret_ref=secret_ref,
+            field=field,
+            selectors=selectors,
+            excluded_text=excluded_text,
+            allowed_origins=allowed_origins,
+        )
+
+
 class BloombergAcquisitionAdapter:
     provider = "bloomberg"
 
@@ -218,7 +274,9 @@ class BloombergAcquisitionAdapter:
             raise ValueError(
                 "Bloomberg authentication requires semantic browser readiness"
             )
-        selected_secrets = secrets or credential_filler()
+        selected_secrets: SecretFiller = (
+            secrets if secrets is not None else _LazyCredentialFiller()
+        )
         self._recipe = recipe
         self._auth = auth
         self._cookie_domains = session.allowed_cookie_domains

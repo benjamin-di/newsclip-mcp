@@ -10,6 +10,7 @@ from lxml import etree
 from pydantic import HttpUrl
 
 from ..articles import parse_aware_datetime
+from ..assessment import search_status_failure
 from ..configured_provider import ConfiguredProvider
 from ..contracts import HttpClient
 from ..errors import (
@@ -186,7 +187,8 @@ class AxiosProvider(ConfiguredProvider):
         fetch = http.get(endpoint, session=None, timeout=8)
         if not 200 <= fetch.http_status < 300:
             raise ProviderTransportError(
-                f"Axios sitemap returned HTTP {fetch.http_status}"
+                f"Axios sitemap returned HTTP {fetch.http_status}",
+                category=search_status_failure(fetch.http_status),
             )
         if len(fetch.raw_html) > 2_000_000:
             raise ProviderTransportError("Axios sitemap exceeded the size limit")

@@ -235,16 +235,33 @@ def test_read_only_health_does_not_create_state(tmp_path):
 def test_worker_failure_cannot_replace_claimed_or_newer_work(tmp_path):
     store = RecoveryStore(tmp_path, utc_now=lambda: NOW)
     first = request(store, uuid4())
-    claimed = store.claim("bloomberg", "cli-first")
-    store.worker_failed("bloomberg", first.health.request_id)
-    assert store.load("bloomberg") == claimed
-    store.finish(claimed, reason="fixture_failed")
+    with store.operation("bloomberg"):
+        claimed = store.claim("bloomberg", "cli-first")
+        store.worker_failed("bloomberg", first.health.request_id)
+        assert store.load("bloomberg") == claimed
+        store.finish(claimed, reason="fixture_failed")
     newer = request(store, uuid4())
     store.worker_failed("bloomberg", first.health.request_id)
     assert store.load("bloomberg") == newer
     with store.operation("bloomberg"):
         store.worker_failed("bloomberg", newer.health.request_id)
     assert store.load("bloomberg") == newer
+
+
+def test_worker_failed_settles_orphaned_running_record(tmp_path):
+    store = RecoveryStore(tmp_path, utc_now=lambda: NOW)
+    first = request(store, uuid4())
+    claimed = store.claim("bloomberg", "cli-first")
+    assert claimed is not None
+    assert claimed.health.status.value == "running"
+
+    store.worker_failed("bloomberg", first.health.request_id)
+
+    settled = store.load("bloomberg")
+    assert settled is not None
+    assert settled.health.status.value == "failed"
+    assert settled.health.reason == "recovery_worker_failed"
+    assert settled.health.next_attempt_at is None
 
 
 def test_exact_article_proof_settles_failure_without_inventing_login_proof(tmp_path):

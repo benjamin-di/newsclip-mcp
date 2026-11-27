@@ -17,7 +17,7 @@ from .assessment import (
     assessment as _assessment,
 )
 from .assessment import (
-    canonical_urls as _canonical_urls,
+    canonical_url_candidates as _canonical_url_candidates,
 )
 from .assessment import (
     document as _document,
@@ -390,8 +390,15 @@ class ConfiguredProvider:
 
         requested = self.normalize_url(url)
         final = self.normalize_url(str(fetch.final_url))
-        canonicals = _canonical_urls(document, self.normalize_url)
-        if requested is None or final != requested or canonicals != [requested]:
+        canonicals, has_unowned_canonical = _canonical_url_candidates(
+            document, self.normalize_url
+        )
+        if (
+            requested is None
+            or final != requested
+            or canonicals != [requested]
+            or has_unowned_canonical
+        ):
             return _PublishedRecovery(None)
 
         json_ld, _ = news_article_json_ld(document)
@@ -471,10 +478,17 @@ class ConfiguredProvider:
                 provider_article_id=requested_id,
             )
 
-        canonical_urls = _canonical_urls(document, self.normalize_url)
-        canonical_url = canonical_urls[0] if len(canonical_urls) == 1 else None
+        canonical_urls, has_unowned_canonical = _canonical_url_candidates(
+            document, self.normalize_url
+        )
+        canonical_conflict = len(canonical_urls) > 1 or has_unowned_canonical
+        canonical_url = (
+            canonical_urls[0]
+            if len(canonical_urls) == 1 and not has_unowned_canonical
+            else None
+        )
         canonical_id = self.article_id(canonical_url or "")
-        if len(canonical_urls) > 1:
+        if canonical_conflict:
             signals.append("canonical_conflict")
         if canonical_id is not None:
             signals.append(self.spec.assessment.canonical_signal)
@@ -504,6 +518,7 @@ class ConfiguredProvider:
             and canonical_id
             and requested_id == final_id == canonical_id
             and len(canonical_urls) == 1
+            and not canonical_conflict
         )
         if not identity_match:
             return _assessment(
@@ -682,14 +697,23 @@ def normalize_url(
     match = identity_pattern.fullmatch(path)
     if match is None:
         return None
-    groups = match.groupdict()
-    for name in spec.identity.lowercase_groups:
-        groups[name] = groups[name].lower()
-    canonical_path = (
-        spec.identity.canonical_path.format_map(groups)
-        if spec.identity.canonical_path is not None
-        else path
-    )
+    if spec.identity.canonical_path is not None:
+        groups = match.groupdict()
+        for name in spec.identity.lowercase_groups:
+            groups[name] = groups[name].lower()
+        canonical_path = spec.identity.canonical_path.format_map(groups)
+    else:
+        canonical_path = path
+        for start, end in sorted(
+            (match.span(name) for name in spec.identity.lowercase_groups),
+            reverse=True,
+        ):
+            if start >= 0:
+                canonical_path = (
+                    canonical_path[:start]
+                    + canonical_path[start:end].lower()
+                    + canonical_path[end:]
+                )
     return urlunsplit(("https", spec.identity.canonical_host, canonical_path, "", ""))
 
 
@@ -949,7 +973,9 @@ def _negative_rule_matches(
         return True
     if path in {value.lower() for value in rule.final_url_paths}:
         return True
-    if any(path.startswith(prefix.lower()) for prefix in rule.final_url_path_prefixes):
+    if any(
+        _path_matches_prefix(path, prefix) for prefix in rule.final_url_path_prefixes
+    ):
         return True
     if document is None:
         return False
@@ -960,6 +986,13 @@ def _negative_rule_matches(
         return True
     page_text = " ".join(document.text_content().lower().split())
     return any(marker.lower() in page_text for marker in rule.text_any)
+
+
+def _path_matches_prefix(path: str, prefix: str) -> bool:
+    normalized = prefix.lower().rstrip("/") or "/"
+    if normalized == "/":
+        return path.startswith("/")
+    return path == normalized or path.startswith(f"{normalized}/")
 
 
 def _xpath_elements(

@@ -1155,9 +1155,12 @@ def iter_timing_runs(
 def _raw_timing_invocation_id(path: Path) -> str | None:
     """Read only routing metadata before validating a selected timing run."""
 
-    with Path(path).open("r", encoding="utf-8") as handle:
-        first_line = handle.readline()
-    payload = json.loads(first_line)
+    try:
+        with Path(path).open("r", encoding="utf-8") as handle:
+            first_line = handle.readline()
+        payload = json.loads(first_line)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
     if not isinstance(payload, dict):
         return None
     value = payload.get("invocation_id")

@@ -785,3 +785,11 @@ def test_readiness_keeps_waiting_through_teaser_and_transient_auth_wall() -> Non
 
     assert sampled.terminal_state is ReadinessTerminalState.STABILIZED
     assert page.now > 3.3
+
+
+def test_url_normalization_lowercases_mixed_case_hex_id() -> None:
+    mixed_case_url = (
+        f"https://www.wsj.com/finance/banks-rally-capital-{ARTICLE_ID.upper()}"
+    )
+    assert normalize_article_url(mixed_case_url) == ARTICLE_URL
+    assert article_id(mixed_case_url) == ARTICLE_ID

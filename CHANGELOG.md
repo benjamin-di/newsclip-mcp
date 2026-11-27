@@ -3,6 +3,33 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.2.5] - 2026-11-27
+
+### Fixed
+
+- Use the standard synthetic `op://fixture/item` reference in `tests/test_credential_readiness.py` so public release exports pass the secret scanner cleanly.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.2.4, 2.2.3, and 2.2.2; no storage or configuration changes.
+
+## [2.2.4] - 2026-11-27
+
+### Fixed
+
+- Pause SessionKeeper incident-review and defense canaries during active human sign-ins (`connection_interactive`) or disconnected controls without resetting holds or budgets.
+- Resolve external credential readers lazily during credential minting so broken `NEWSCLIP_CREDENTIAL_READER` factories do not crash read-only, health, or warm-maintenance CLI commands while preserving fail-closed non-fallback on mint.
+- Fix `SessionStore.promote_browser_session()` lock-order reentrancy on corrupt session files, arm defense on HTTP 401 canary refusals, prepare browser fallback for `--import-cookies`, settle orphaned `RUNNING` recovery records on worker failure, and unify `max_age_hours` cap to 720.
+- Harden Connections live checks against unexpected exceptions, protect in-flight `saving` promotions from viewer cancel, and offload control-file locks and `fsync` to the adapter dispatcher.
+- Fix URL `lowercase_groups` normalization without `canonical_path`, flag non-owned canonical/`og:url` conflicts, normalize `final_url_path_prefixes` matching for `/barrier/`, catch Economist `_TransientNavigation`, validate FT session cookie domain and value, and classify Guardian, Axios, and AP non-2xx search errors.
+- Fix `CurlCffiHttpClient.close()` route-retirement races, ignore 3xx responses in `MainDocumentResponse`, guard PerimeterX frame detachment and `bounding_box()` timeouts, fix `NewsclipClient.__getattr__` admin method names, skip corrupt or empty unrelated timing files, filter retired `TransportDrip` candidates, invoke `on_forced_close` on failed kept browsers, and lock virtual-display initialization.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.2.3, 2.2.2, and 2.2.1; no storage or configuration changes.
+
 ## [2.2.3] - 2026-11-27
 
 ### Changed

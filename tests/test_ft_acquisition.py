@@ -628,10 +628,22 @@ def test_session_cookie_proof_uses_the_provider_definition(tmp_path: Path) -> No
     )
 
     assert adapter._has_ft_session(
+        [{"name": "configured_session_123", "value": "token", "domain": ".ft.com"}]
+    )
+    assert not adapter._has_ft_session(
         [{"name": "configured_session_123", "domain": ".ft.com"}]
     )
     assert not adapter._has_ft_session(
-        [{"name": "FTSession_legacy", "domain": ".ft.com"}]
+        [{"name": "configured_session_123", "value": "   ", "domain": ".ft.com"}]
+    )
+    assert not adapter._has_ft_session(
+        [{"name": "configured_session_123", "value": "token", "domain": ".evil.com"}]
+    )
+    assert not adapter._has_ft_session(
+        [{"name": "configured_session_123", "value": "token"}]
+    )
+    assert not adapter._has_ft_session(
+        [{"name": "FTSession_legacy", "value": "token", "domain": ".ft.com"}]
     )
 
 

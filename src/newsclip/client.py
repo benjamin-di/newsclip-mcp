@@ -229,10 +229,11 @@ class NewsclipClient:
             "archive_drift",
             "login",
             "session_checkpoint",
-            "reset_session",
-            "clear_session",
-            "acknowledge_session",
-            "reset_browser_profile",
+            "session_reset",
+            "session_clear",
+            "session_acknowledge",
+            "browser_profile_reset",
+            "provider_check",
         }:
             raise UsageError(
                 "run this administration command locally on the server; "

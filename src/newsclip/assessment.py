@@ -77,11 +77,14 @@ def search_json_object(fetch: RawFetch) -> Mapping[str, object]:
     return payload
 
 
-def canonical_urls(
+def canonical_url_candidates(
     parsed: html.HtmlElement,
     normalizer: Callable[[str], str | None],
-) -> list[str]:
+) -> tuple[list[str], bool]:
+    """Return owned canonical URLs and whether any non-empty value failed."""
+
     candidates: list[str] = []
+    has_unowned = False
     values = parsed.xpath(
         "//link[contains(concat(' ', normalize-space(@rel), ' '), "
         "' canonical ')]/@href | "
@@ -89,9 +92,23 @@ def canonical_urls(
         "'abcdefghijklmnopqrstuvwxyz')='og:url']/@content"
     )
     for value in values:
-        normalized = normalizer(str(value))
-        if normalized and normalized not in candidates:
+        raw = str(value).strip()
+        if not raw:
+            continue
+        normalized = normalizer(raw)
+        if normalized is None:
+            has_unowned = True
+            continue
+        if normalized not in candidates:
             candidates.append(normalized)
+    return candidates, has_unowned
+
+
+def canonical_urls(
+    parsed: html.HtmlElement,
+    normalizer: Callable[[str], str | None],
+) -> list[str]:
+    candidates, _ = canonical_url_candidates(parsed, normalizer)
     return candidates
 
 

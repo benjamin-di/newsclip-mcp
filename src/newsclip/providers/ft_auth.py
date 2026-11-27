@@ -61,6 +61,7 @@ from ..provider_config import (
 from ..session_cookies import (
     SessionCookieFormatError,
     SessionCookiesMissing,
+    cookie_domain_allowed,
     normalize_browser_cookie_export,
 )
 from ..timing import TimingStep, timing_step
@@ -400,12 +401,18 @@ class FTAcquisitionAdapter:
                 }
             )
         )
+        self._cookie_domains = frozenset(session.allowed_cookie_domains)
         self._session_cookie_prefixes = session.session_cookie_name_prefixes
         self._observe_script = build_auth_observation_script(self._auth.observations)
         self._token_probe_script = build_ft_native_token_probe_script(selected_spec)
-        self._secrets = secrets or credential_filler()
+        self._secrets: SecretFiller | None = secrets
         self._challenge_resolver = challenge_resolver
         self._clock = clock or (lambda: datetime.now(UTC))
+
+    def _secret_filler(self) -> SecretFiller:
+        if self._secrets is None:
+            self._secrets = credential_filler()
+        return self._secrets
 
     def rehydrate_profile(
         self,
@@ -514,7 +521,7 @@ class FTAcquisitionAdapter:
             self._settle_consent(browser)
             with timing_step(TimingStep.USERNAME, provider=self.provider):
                 # Single-field fill commits the email for HTML5 validation before Next.
-                self._secrets.fill(
+                self._secret_filler().fill(
                     browser,
                     secret_ref=self._recipe.secret_ref,
                     field="username",
@@ -535,7 +542,7 @@ class FTAcquisitionAdapter:
                 MintFailureCategory.CONTROL_MISSING,
             )
         with timing_step(TimingStep.PASSWORD, provider=self.provider):
-            self._secrets.fill(
+            self._secret_filler().fill(
                 browser,
                 secret_ref=self._recipe.secret_ref,
                 field="password",
@@ -687,7 +694,7 @@ class FTAcquisitionAdapter:
                 post_challenge = self._observe(browser, phase=AuthPhase.CALLBACK)
                 if post_challenge.password_visible:
                     with timing_step(TimingStep.PASSWORD, provider=self.provider):
-                        self._secrets.fill(
+                        self._secret_filler().fill(
                             browser,
                             secret_ref=self._recipe.secret_ref,
                             field="password",
@@ -1048,7 +1055,12 @@ class FTAcquisitionAdapter:
 
     def _has_ft_session(self, cookies: Sequence[Mapping[str, object]]) -> bool:
         return any(
-            str(cookie.get("name", "")).lower().startswith(prefix)
+            bool(str(cookie.get("value", "")).strip())
+            and cookie_domain_allowed(
+                str(cookie.get("domain", "")),
+                self._cookie_domains,
+            )
+            and str(cookie.get("name", "")).lower().startswith(prefix)
             for cookie in cookies
             for prefix in self._session_cookie_prefixes
         )

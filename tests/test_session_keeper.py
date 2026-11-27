@@ -1953,3 +1953,71 @@ def test_completed_recovery_does_not_hide_current_hold_or_touch_its_budget(tmp_p
     assert budget.attempts_today("ft") == 0
     assert before == {p.name: p.read_bytes() for p in guard_store.root.glob("*.json")}
     assert recovery_store.load("ft").health.status == "succeeded"
+
+
+@pytest.mark.parametrize(
+    "blocker", ["connection_interactive", "connection_disconnected"]
+)
+@pytest.mark.parametrize(
+    "path", ["keep_incident", "keep_defense", "recover_incident", "recover_defense"]
+)
+def test_canaries_pause_under_connection_blocker_without_provider_io(
+    tmp_path, blocker: str, path: str
+):
+    from types import SimpleNamespace
+
+    from newsclip.models import RecoveryStatus
+    from newsclip.provider_guard import GuardAction
+
+    canaries: list[str] = []
+    checks: list[str] = []
+
+    class RecordingGuard(FakeGuard):
+        def run_incident_review_canary(self, provider, check):
+            canaries.append(provider)
+            check()
+            return SimpleNamespace(action=GuardAction.HEALTHY)
+
+    if path.startswith("recover_"):
+        keeper, sessions, store, _, budget = _recovery_keeper(tmp_path)
+    else:
+        sessions = FakeSessions(status=SessionStatus.OPERATOR_ACTION)
+        keeper, _, budget = _keeper(tmp_path, sessions=sessions)
+        store = None
+
+    sessions.session_status = lambda provider_key: SessionHealth(
+        provider=provider_key,
+        account_key="default",
+        status=SessionStatus.OPERATOR_ACTION,
+        failure_reason_code=blocker,
+    )
+    sessions.defense_pending = lambda provider_key: path.endswith("_defense")
+
+    original_check = sessions.provider_check
+
+    def recording_check(provider: str):
+        checks.append(provider)
+        return original_check(provider)
+
+    sessions.provider_check = recording_check
+    hold = (
+        SimpleNamespace(action=GuardAction.INCIDENT_REVIEW_REQUIRED)
+        if path.endswith("_incident")
+        else None
+    )
+    keeper._guard = RecordingGuard(hold)
+
+    result = keeper.keep("ft", allow_credential_mint=True)
+
+    assert result.action is KeeperAction.OPERATOR_ACTION_REQUIRED
+    assert result.status is SessionStatus.OPERATOR_ACTION
+    assert result.reason_code == blocker
+    assert canaries == []
+    assert checks == []
+    assert sessions.logins == []
+    assert budget.attempts_today("ft") == 0
+    assert keeper._guard.peek("ft") is hold
+    if store is not None:
+        record = store.load("ft")
+        assert record.health.status is RecoveryStatus.PENDING
+        assert record.health.attempts == 0

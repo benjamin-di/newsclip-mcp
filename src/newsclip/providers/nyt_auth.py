@@ -123,9 +123,14 @@ class NYTAcquisitionAdapter:
         )
         self._cookie_domains = session.allowed_cookie_domains
         self._observe_script = build_auth_observation_script(self._auth.observations)
-        self._secrets = secrets or credential_filler()
+        self._secrets: SecretFiller | None = secrets
         self._challenge_resolver = challenge_resolver
         self._clock = clock or (lambda: datetime.now(UTC))
+
+    def _secret_filler(self) -> SecretFiller:
+        if self._secrets is None:
+            self._secrets = credential_filler()
+        return self._secrets
 
     def rehydrate_profile(
         self,
@@ -186,7 +191,7 @@ class NYTAcquisitionAdapter:
             # repeat the username step; a read-only decoy cannot trigger it.
             if observation.username_visible:
                 with timing_step(TimingStep.USERNAME, provider=self.provider):
-                    self._secrets.fill(
+                    self._secret_filler().fill(
                         browser,
                         secret_ref=self._recipe.secret_ref,
                         field="username",
@@ -204,7 +209,7 @@ class NYTAcquisitionAdapter:
                     MintFailureCategory.CONTROL_MISSING,
                 )
             with timing_step(TimingStep.PASSWORD, provider=self.provider):
-                self._secrets.fill(
+                self._secret_filler().fill(
                     browser,
                     secret_ref=self._recipe.secret_ref,
                     field="password",

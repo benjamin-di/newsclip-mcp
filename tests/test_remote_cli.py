@@ -8,20 +8,27 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-pytest.importorskip("signin_window")
-pytest.importorskip("fastmcp")
-
-from starlette.testclient import TestClient  # noqa: E402
-from test_standalone import make_app  # noqa: E402
-
-from newsclip import cli, remote_cli  # noqa: E402
-from newsclip.client import NewsclipClient  # noqa: E402
+from newsclip.client import NewsclipClient
+from newsclip.errors import UsageError
 
 
-@pytest.mark.parametrize("interface", [cli, remote_cli])
+def _require_standalone_stack():
+    pytest.importorskip("signin_window")
+    pytest.importorskip("fastmcp")
+    from starlette.testclient import TestClient
+    from test_standalone import make_app
+
+    from newsclip import cli, remote_cli
+
+    return TestClient, make_app, cli, remote_cli
+
+
+@pytest.mark.parametrize("interface_name", ["cli", "remote_cli"])
 def test_remote_cli_uses_shared_search_save_archive_and_connect(
-    accounts, tmp_path, monkeypatch, interface
+    accounts, tmp_path, monkeypatch, interface_name
 ):
+    TestClient, make_app, cli, remote_cli = _require_standalone_stack()
+    interface = cli if interface_name == "cli" else remote_cli
     app, tokens, _ = make_app(accounts, tmp_path)
     token_file = tmp_path / "alice.token"
     with TestClient(app, base_url="http://127.0.0.1") as http:
@@ -117,6 +124,7 @@ def test_remote_cli_uses_shared_search_save_archive_and_connect(
 
 
 def test_new_token_revokes_previous_token_without_restarting(accounts, tmp_path):
+    TestClient, make_app, _cli, _remote_cli = _require_standalone_stack()
     from newsclip.tenancy import add_user
 
     app, tokens, _ = make_app(accounts, tmp_path)
@@ -150,6 +158,7 @@ def test_new_token_revokes_previous_token_without_restarting(accounts, tmp_path)
 def test_provider_defense_reason_crosses_authenticated_http_and_cli(
     accounts, tmp_path, monkeypatch
 ):
+    TestClient, make_app, cli, _remote_cli = _require_standalone_stack()
     from test_federated_search import SearchProvider, _service
 
     from newsclip.errors import ProviderDefenseError
@@ -203,3 +212,38 @@ def test_provider_defense_reason_crosses_authenticated_http_and_cli(
             headers={"Authorization": f"Bearer {tokens['alice']}"},
         )
         assert denied.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "archive_backup",
+        "archive_restore",
+        "archive_drift",
+        "login",
+        "session_checkpoint",
+        "session_reset",
+        "session_clear",
+        "session_acknowledge",
+        "browser_profile_reset",
+        "provider_check",
+    ],
+)
+def test_remote_client_rejects_local_admin_methods_with_usage_error(
+    method_name: str,
+) -> None:
+    client = NewsclipClient("http://127.0.0.1/users/alice", "token")
+    try:
+        with pytest.raises(UsageError, match="administration command locally"):
+            getattr(client, method_name)
+    finally:
+        client.close()
+
+
+def test_remote_client_raises_attribute_error_for_unknown_attribute() -> None:
+    client = NewsclipClient("http://127.0.0.1/users/alice", "token")
+    try:
+        with pytest.raises(AttributeError):
+            _ = client.nonexistent_method
+    finally:
+        client.close()

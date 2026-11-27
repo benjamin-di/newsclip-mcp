@@ -182,6 +182,9 @@ class CurlCffiHttpClient:
             finally:
                 route.lock.release()
 
+        with self._routes_lock:
+            if self._closed:
+                raise RuntimeError("HTTP client is closed")
         client = self._new_session(impersonate=impersonate)
         try:
             return self._perform_get(
@@ -378,6 +381,8 @@ class CurlCffiHttpClient:
                 return
             self._closed = True
             routes = tuple(self._routes.values())
+            for route in routes:
+                route.retired = True
             self._routes.clear()
             self._retired_session_routes.clear()
         for route in routes:
@@ -403,68 +408,70 @@ class CurlCffiHttpClient:
     ) -> _Route:
         key = _route_key(url, session, impersonate)
         retired_routes: list[_Route] = []
-        with self._routes_lock:
-            if self._closed:
-                raise RuntimeError("HTTP client is closed")
-            if key in self._retired_session_routes:
-                raise ProviderTransportError(
-                    "provider HTTP session generation is retired"
-                )
-            route = self._routes.get(key)
-            if route is None:
-                if session is not None:
-                    identity = key[:3]
-                    for old_key in tuple(self._routes):
-                        if old_key[:3] != identity:
-                            continue
-                        retired = self._routes.pop(old_key)
-                        retired.retired = True
-                        retired_routes.append(retired)
-                        self._retired_session_routes.add(old_key)
-                else:
-                    # A promoted runtime pin supersedes this origin's older
-                    # profile (R8). Close the superseded route rather than
-                    # leaving an idle keep-alive connection open on a
-                    # fingerprint just measured dead. Unlike a session
-                    # generation, the old key is not blocklisted: a pin may
-                    # legitimately be promoted back.
-                    for old_key in tuple(self._routes):
-                        if old_key[0] != "anonymous" or old_key[1] != key[1]:
-                            continue
-                        retired = self._routes.pop(old_key)
-                        retired.retired = True
-                        retired_routes.append(retired)
-                client: requests.Session
-                if session is not None:
-                    client = self._new_session(
-                        impersonate=impersonate,
-                        cookies=portable_cookie_jar(session.cookies),
-                        headers=(
-                            {"User-Agent": session.user_agent}
-                            if session.user_agent is not None
+        try:
+            with self._routes_lock:
+                if self._closed:
+                    raise RuntimeError("HTTP client is closed")
+                if key in self._retired_session_routes:
+                    raise ProviderTransportError(
+                        "provider HTTP session generation is retired"
+                    )
+                route = self._routes.get(key)
+                if route is None:
+                    if session is not None:
+                        identity = key[:3]
+                        for old_key in tuple(self._routes):
+                            if old_key[:3] != identity:
+                                continue
+                            retired = self._routes.pop(old_key)
+                            retired.retired = True
+                            retired_routes.append(retired)
+                            self._retired_session_routes.add(old_key)
+                    else:
+                        # A promoted runtime pin supersedes this origin's older
+                        # profile (R8). Close the superseded route rather than
+                        # leaving an idle keep-alive connection open on a
+                        # fingerprint just measured dead. Unlike a session
+                        # generation, the old key is not blocklisted: a pin may
+                        # legitimately be promoted back.
+                        for old_key in tuple(self._routes):
+                            if old_key[0] != "anonymous" or old_key[1] != key[1]:
+                                continue
+                            retired = self._routes.pop(old_key)
+                            retired.retired = True
+                            retired_routes.append(retired)
+                    client: requests.Session
+                    if session is not None:
+                        client = self._new_session(
+                            impersonate=impersonate,
+                            cookies=portable_cookie_jar(session.cookies),
+                            headers=(
+                                {"User-Agent": session.user_agent}
+                                if session.user_agent is not None
+                                else None
+                            ),
+                        )
+                    else:
+                        client = self._new_session(impersonate=impersonate)
+                    route = _Route(
+                        client=client,
+                        lock=threading.Lock(),
+                        generation_fingerprint=(
+                            hashlib.sha256(
+                                str(session.generation_id).encode("ascii")
+                            ).hexdigest()[:12]
+                            if session is not None
                             else None
                         ),
+                        initial_cookies=_cookie_state(client)
+                        if self._trace is not None
+                        else None,
                     )
-                else:
-                    client = self._new_session(impersonate=impersonate)
-                route = _Route(
-                    client=client,
-                    lock=threading.Lock(),
-                    generation_fingerprint=(
-                        hashlib.sha256(
-                            str(session.generation_id).encode("ascii")
-                        ).hexdigest()[:12]
-                        if session is not None
-                        else None
-                    ),
-                    initial_cookies=_cookie_state(client)
-                    if self._trace is not None
-                    else None,
-                )
-                self._routes[key] = route
-        for retired in retired_routes:
-            with retired.lock:
-                retired.client.close()
+                    self._routes[key] = route
+        finally:
+            for retired in retired_routes:
+                with retired.lock:
+                    retired.client.close()
         return route
 
     def _new_session(

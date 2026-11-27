@@ -67,6 +67,9 @@ class MainDocumentResponse:
                 response.frame is self.page.main_frame
                 and response.request.is_navigation_request()
             ):
+                status = getattr(response, "status", None)
+                if type(status) is int and 300 <= status < 400:
+                    return
                 self.pending = response
                 if self.unmatched_commit and self._committed_url is not None:
                     self._commit(self._committed_url)

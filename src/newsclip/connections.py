@@ -5,6 +5,7 @@ from __future__ import annotations
 import collections
 import html
 import json
+import logging
 import os
 import secrets
 import stat
@@ -52,6 +53,7 @@ from .subscription_access import SubscriptionAccess
 from .tenancy import application_root, load_users, user_scope
 from .ui import renderer_options
 
+_LOGGER = logging.getLogger(__name__)
 _CHECK_COOLDOWN_SECONDS = 15.0
 _CHECK_TTL_SECONDS = 600.0
 
@@ -451,8 +453,24 @@ class Connections:
                     if link.viewer_revoked:
                         data["closing"] = True
                 return JSONResponse(data, headers={"Cache-Control": "no-store"})
-            self.controls[user].cancel(link.key, "default", link.context.target)
-            await self.adapters[user].dispatcher.run(lambda: relay.cancel(link))
+            target = link.context.target
+
+            def do_cancel() -> None:
+                with link.lock:
+                    if link.state not in ("ready", "starting", "waiting"):
+                        return
+                relay.cancel(link)
+                with link.lock:
+                    should_cancel_controls = link.state in (
+                        "ready",
+                        "starting",
+                        "waiting",
+                        "cancelled",
+                    )
+                if should_cancel_controls:
+                    self.controls[user].cancel(link.key, "default", target)
+
+            await self.adapters[user].dispatcher.run(do_cancel)
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
         return [
@@ -792,6 +810,17 @@ class Connections:
                     "network issue. Your saved connection was kept."
                 )
             except (NewsclipError, OSError, ValueError):
+                result_state = "inconclusive"
+                result_detail = (
+                    "Live check could not finish right now. "
+                    "Your saved connection was kept."
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "Unexpected error during live session check for %s/%s",
+                    user,
+                    provider,
+                )
                 result_state = "inconclusive"
                 result_detail = (
                     "Live check could not finish right now. "
@@ -1654,13 +1683,19 @@ class Connections:
                 )
                 return RedirectResponse(link.url, status_code=303)
             if action == "disconnect":
-                disconnect_revision = self.controls[user].suspend(
-                    provider, expected_revision=expected_revision
+                disconnect_revision = await adapter.dispatcher.run(
+                    lambda: self.controls[user].suspend(
+                        provider, expected_revision=expected_revision
+                    )
                 )
                 if disconnect_revision is None:
                     return RedirectResponse(self.home, status_code=303)
             else:
-                self.controls[user].cancel(provider, "default", expected_revision)
+                await adapter.dispatcher.run(
+                    lambda: self.controls[user].cancel(
+                        provider, "default", expected_revision
+                    )
+                )
             settled_ids: set[str] = set()
 
             def drain_links():

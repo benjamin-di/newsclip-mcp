@@ -10,6 +10,7 @@ from lxml import etree
 from pydantic import HttpUrl
 
 from ..articles import parse_aware_datetime
+from ..assessment import search_status_failure
 from ..configured_provider import ConfiguredProvider, normalize_url, provider_article_id
 from ..contracts import HttpClient
 from ..errors import (
@@ -204,7 +205,8 @@ def _tokens(value: str) -> set[str]:
 def _validate_sitemap_response(fetch: RawFetch, endpoint: str) -> None:
     if not 200 <= fetch.http_status < 300:
         raise ProviderTransportError(
-            f"provider sitemap returned HTTP {fetch.http_status}"
+            f"provider sitemap returned HTTP {fetch.http_status}",
+            category=search_status_failure(fetch.http_status),
         )
     if len(fetch.raw_html) > _MAX_SITEMAP_BYTES:
         raise ProviderTransportError("provider sitemap exceeded the size limit")

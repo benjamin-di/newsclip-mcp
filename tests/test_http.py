@@ -799,3 +799,57 @@ def test_session_routes_ignore_the_runtime_pin(monkeypatch) -> None:
 
     assert FakeSession.instances[0].impersonate == DEFAULT_HTTP_IMPERSONATION
     assert fetch.serving_transport == DEFAULT_HTTP_IMPERSONATION
+
+
+def test_close_retires_routes_and_blocks_anonymous_overflow_after_close(
+    monkeypatch,
+) -> None:
+    FakeSession.instances = []
+    monkeypatch.setattr("newsclip.http.requests.Session", FakeSession)
+    client = CurlCffiHttpClient()
+    artifact = _artifact(user_agent=None)
+    client.get(FakeResponse.url, session=artifact)
+    client.get("https://provider.test/first")
+
+    auth_route = client._route(FakeResponse.url, artifact, DEFAULT_HTTP_IMPERSONATION)
+    anon_route = client._route(
+        "https://provider.test/first", None, DEFAULT_HTTP_IMPERSONATION
+    )
+    client.close()
+
+    assert auth_route.retired is True
+    assert anon_route.retired is True
+
+    # Simulate _anonymous_get having resolved anon_route right before close().
+    monkeypatch.setattr(client, "_route", lambda *_args, **_kwargs: anon_route)
+    count_before = len(FakeSession.instances)
+    with pytest.raises(RuntimeError, match="closed"):
+        client.get("https://provider.test/after-close")
+    assert len(FakeSession.instances) == count_before
+
+
+def test_route_closes_retired_routes_when_new_session_fails(monkeypatch) -> None:
+    FakeSession.instances = []
+    monkeypatch.setattr("newsclip.http.requests.Session", FakeSession)
+    promoted: list[str | None] = [None]
+    client = CurlCffiHttpClient(
+        impersonate_by_host={"reuters.test": "safari2601"},
+        runtime_impersonate_by_host=lambda host: (
+            promoted[0] if host == "reuters.test" else None
+        ),
+    )
+
+    client.get("https://reuters.test/first")
+    first_session = FakeSession.instances[0]
+    assert first_session.closed is False
+
+    promoted[0] = "chrome146"
+    monkeypatch.setattr(
+        client,
+        "_new_session",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("session init failed")),
+    )
+
+    with pytest.raises(RuntimeError, match="session init failed"):
+        client.get("https://reuters.test/second")
+    assert first_session.closed is True

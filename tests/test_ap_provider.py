@@ -440,3 +440,20 @@ def test_assessment_closes_on_story_body_without_article_element(
 
     assert assessment.access_state is expected
     assert assessment.promotable is (expected is AccessState.FULL)
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_category"),
+    [
+        (429, "rate_limited"),
+        (503, "provider_error"),
+    ],
+)
+def test_sitemap_non_2xx_classifies_transport_failure_category(
+    status: int, expected_category: str
+) -> None:
+    http = SitemapHttp()
+    http.status = status
+    with pytest.raises(ProviderTransportError) as caught:
+        ApProvider().search(http, None, "judge", SearchFilters())
+    assert caught.value.category.value == expected_category

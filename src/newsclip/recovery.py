@@ -548,7 +548,7 @@ class RecoveryStore:
             )
 
     def worker_failed(self, provider: str, request_id: str) -> None:
-        """Settle only an exited, unclaimed dispatch; never replace live work."""
+        """Settle an exited, unclaimed or orphaned dispatch; never replace live work."""
         try:
             with self.operation(provider), self._locked(provider):
                 record = self.load(provider)
@@ -556,7 +556,8 @@ class RecoveryStore:
                     record is None
                     or record.health.request_id != request_id
                     or (
-                        record.health.status is not RecoveryStatus.PENDING
+                        record.health.status
+                        not in {RecoveryStatus.PENDING, RecoveryStatus.RUNNING}
                         and self.automatic_retry_due(record) is None
                     )
                 ):

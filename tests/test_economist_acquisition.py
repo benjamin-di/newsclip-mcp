@@ -1043,3 +1043,58 @@ def test_native_locator_selector_error_is_recorded_and_fails_closed(
             "selector_error": True,
         }
     ]
+
+
+def test_mint_credentials_recovers_from_transient_navigation_in_entry_phase(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    browser = FakeBrowser(
+        [
+            {"username_visible": True, "password_visible": True},
+            {"authenticated": True},
+        ],
+        cookies=[_cookie()],
+    )
+    secrets = FakeSecrets()
+    adapter = _adapter(tmp_path, secrets=secrets)
+    original_observe = adapter._observe_for_phase
+    calls = 0
+
+    def observe_with_transient(active_browser, phase):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise economist_auth_module._TransientNavigation("navigating")
+        return original_observe(active_browser, phase)
+
+    monkeypatch.setattr(adapter, "_observe_for_phase", observe_with_transient)
+
+    candidate = adapter.mint_credentials(
+        browser,
+        account_key="default",
+        challenge_mode=ChallengeMode.DETECT_ONLY,
+    )
+
+    assert candidate.evidence.mode is AcquisitionMode.CREDENTIAL_MINT
+    assert secrets.fields == ["username", "password"]
+
+
+def test_settle_verification_context_retries_transient_navigation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    browser = FakeBrowser([], cookies=[_cookie()])
+    adapter = _adapter(tmp_path)
+    calls = 0
+
+    def resolve_with_transient(active_browser, mode):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise economist_auth_module._TransientNavigation("challenge reload")
+
+    monkeypatch.setattr(adapter, "_resolve_challenge", resolve_with_transient)
+
+    fetch = adapter._settle_verification_context(browser, ChallengeMode.AUTO)
+
+    assert calls == 2
+    assert adapter._recipe.verify_fetch(fetch).verified

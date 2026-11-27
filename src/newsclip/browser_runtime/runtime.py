@@ -1728,15 +1728,24 @@ class PatchrightRuntime:
         kept = self._kept.pop(key, None)
         if kept is None:
             return
-        self._shutdown_context(
-            kept.manager,
-            kept.context,
-            browser_mode=kept.browser_mode,
-            profile_generation=kept.profile_generation,
-            started_monotonic=kept.started_monotonic,
-            primary_failure=True,
-            process=kept.process,
-        )
+        release_owner: Callable[[], None] | None = None
+        if kept.on_forced_close is not None:
+            with suppress(Exception):
+                release_owner = kept.on_forced_close(kept.profile)
+        try:
+            self._shutdown_context(
+                kept.manager,
+                kept.context,
+                browser_mode=kept.browser_mode,
+                profile_generation=kept.profile_generation,
+                started_monotonic=kept.started_monotonic,
+                primary_failure=True,
+                process=kept.process,
+            )
+        finally:
+            if release_owner is not None:
+                with suppress(Exception):
+                    release_owner()
 
     def _shutdown_context(
         self,

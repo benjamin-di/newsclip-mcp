@@ -1638,3 +1638,116 @@ def test_current_hold_diagnostics_fail_on_corrupt_cadence_and_isolate_users(tmp_
     (store.root / "ft.incident-canary.json").write_bytes(b"not-json")
     with pytest.raises(ProviderGuardPersistenceError):
         alice.current_hold_health("ft")
+
+
+def test_provider_check_retrieval_arms_defense_on_http_401(tmp_path):
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from newsclip.defense import DefenseState
+    from newsclip.models import (
+        AccessState,
+        ArticleAssessment,
+        ProviderCapabilities,
+        ProviderSearchPage,
+        RateBudget,
+        RawFetch,
+        SearchResult,
+    )
+    from newsclip.providers import ProviderRegistry
+    from newsclip.service import NewsclipService
+
+    now = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+
+    class StubProvider:
+        key = "ft"
+        name = "FT"
+        capabilities = ProviderCapabilities(
+            requires_session_for_retrieve=False,
+            retrieval_transport="http",
+        )
+        login_recipe = None
+        extraction_scope = None
+        check = SimpleNamespace(
+            query="markets",
+            canonical_url="https://www.ft.com/content/fixture",
+            allow_empty_search=False,
+            require_canonical_result=False,
+        )
+
+        def match_url(self, url: str) -> bool:
+            return url.startswith("https://www.ft.com/")
+
+        def owns_url(self, url: str) -> bool:
+            return url.startswith("https://www.ft.com/")
+
+        def normalize_url(self, url: str) -> str:
+            return url
+
+        def rate_budget(self) -> RateBudget:
+            return RateBudget(requests_per_second=1, burst=1)
+
+        def search_page(
+            self,
+            http,
+            session,
+            query,
+            filters,
+            *,
+            next_url=None,
+            metadata_fetch_budget=None,
+        ):
+            return ProviderSearchPage(
+                results=(
+                    SearchResult(
+                        provider="ft",
+                        headline="Headline",
+                        url="https://www.ft.com/content/fixture",
+                    ),
+                ),
+            )
+
+        def fetch(self, http, session, url):
+            return RawFetch(
+                requested_url=url,
+                final_url=url,
+                http_status=401,
+                content_type="text/html",
+                raw_html=b"<html><body>Unauthorized</body></html>",
+                retrieved_at=now,
+                serving_transport="http",
+            )
+
+        def assess(self, requested_url, fetch, extraction):
+            return ArticleAssessment(
+                access_state=AccessState.AUTH_REQUIRED,
+                word_count=extraction.word_count,
+                reason="http_401",
+            )
+
+    class StubExtractor:
+        name = "stub"
+        version = "1"
+
+        def extract(self, fetch, *, scope_xpath=None):
+            from newsclip.models import ExtractedArticle
+
+            return ExtractedArticle(
+                body_markdown="Unauthorized",
+                word_count=1,
+            )
+
+    defense = DefenseState(tmp_path / "defense", utc_now=lambda: now)
+    service = NewsclipService(
+        ProviderRegistry((StubProvider(),)),
+        http=object(),  # type: ignore[arg-type]
+        extractor=StubExtractor(),  # type: ignore[arg-type]
+        defense=defense,
+    )
+
+    result = service.provider_check("ft")
+
+    assert result.failure is ProviderCheckFailure.PROVIDER_DEFENSE
+    assert result.http_status == 401
+    assert service.defense_pending("ft") is True
+    assert defense.gate("ft").allowed is False

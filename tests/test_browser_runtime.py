@@ -1555,6 +1555,100 @@ def test_keep_alive_runtime_discards_failed_context_before_relaunch(
     assert runtime._kept == {}
 
 
+def test_keep_alive_failed_close_invokes_on_forced_close(tmp_path: Path) -> None:
+    events: list[str] = []
+
+    class TrackingContext(FakeContext):
+        def close(self) -> None:
+            events.append("context.close")
+            super().close()
+
+    runtime = PatchrightRuntime(context_factory=lambda **_kwargs: TrackingContext())
+    profile = tmp_path / "profile"
+
+    def on_forced_close(closed_profile: Path):
+        events.append(f"forced_close:{closed_profile.name}")
+        return lambda: events.append("release_owner")
+
+    with runtime.open(
+        profile,
+        require_virtual_display=False,
+        keep_alive=True,
+        on_forced_close=on_forced_close,
+    ):
+        pass
+
+    with (
+        pytest.raises(ValueError, match="reused boom"),
+        runtime.open(
+            profile,
+            require_virtual_display=False,
+            keep_alive=True,
+            on_forced_close=on_forced_close,
+        ),
+    ):
+        raise ValueError("reused boom")
+
+    assert events == ["forced_close:profile", "context.close", "release_owner"]
+
+
+def test_ensure_virtual_display_serializes_concurrent_host_xvfb_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    surface_module._ACTIVE = None
+    started = threading.Event()
+    proceed = threading.Event()
+    starts: list[int] = []
+
+    def fake_start(_display_number, *, environment=None):  # noqa: ANN001, ANN202
+        starts.append(1)
+        started.set()
+        proceed.wait(timeout=2.0)
+        return SurfaceHandle(
+            SurfaceMode.HOST_XVFB,
+            DisplayClass.VIRTUAL_LOCAL,
+            ":2199",
+        )
+
+    monkeypatch.setattr(surface_module, "_start_host_xvfb", fake_start)
+    monkeypatch.setattr(
+        surface_module,
+        "display_is_usable",
+        lambda display: display == ":2199",
+    )
+    monkeypatch.setattr(surface_module.atexit, "register", lambda _fn: None)
+
+    results: list[SurfaceHandle] = []
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            results.append(ensure_virtual_display(environment={}))
+        except BaseException as error:  # noqa: BLE001
+            errors.append(error)
+
+    first = threading.Thread(target=worker)
+    second = threading.Thread(target=worker)
+    try:
+        first.start()
+        assert started.wait(timeout=2.0)
+        second.start()
+        # Give second thread a brief window to race into _start_host_xvfb if unlocked.
+        second.join(timeout=0.1)
+        proceed.set()
+        first.join(timeout=2.0)
+        second.join(timeout=2.0)
+    finally:
+        surface_module._ACTIVE = None
+
+    assert errors == []
+    assert len(starts) == 1
+    assert len(results) == 2
+    assert results[0] is results[1]
+
+
 def test_held_profile_lease_release_is_idempotent(tmp_path: Path) -> None:
     manager = LeaseManager(tmp_path / "locks")
     profile = tmp_path / "profile"

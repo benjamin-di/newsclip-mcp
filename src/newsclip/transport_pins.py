@@ -539,7 +539,10 @@ def next_candidate(
 
     if state is None:
         return None
-    if state.candidate_profile is not None:
+    if (
+        state.candidate_profile is not None
+        and state.candidate_profile in HTTP_IMPERSONATION_PROFILES
+    ):
         return state.candidate_profile
     excluded = {
         declared_profile,

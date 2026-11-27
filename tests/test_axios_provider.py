@@ -431,6 +431,24 @@ def test_sitemap_response_contract(update, kind):
         AxiosProvider().search(Http(raw), None, "energy", SearchFilters())
 
 
+@pytest.mark.parametrize(
+    ("status", "expected_category"),
+    [
+        (429, "rate_limited"),
+        (503, "provider_error"),
+    ],
+)
+def test_sitemap_non_2xx_classifies_transport_failure_category(
+    status, expected_category
+):
+    raw = fetch(sitemap(), url=ENDPOINT, content_type="application/xml").model_copy(
+        update={"http_status": status}
+    )
+    with pytest.raises(ProviderTransportError) as caught:
+        AxiosProvider().search(Http(raw), None, "energy", SearchFilters())
+    assert caught.value.category.value == expected_category
+
+
 def test_service_archive_export_reextract_and_rejection(tmp_path):
     provider = AxiosProvider()
     registry = ProviderRegistry([provider])

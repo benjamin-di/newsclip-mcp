@@ -107,10 +107,15 @@ class EconomistAcquisitionAdapter:
                 }
             )
         )
-        self._secrets = secrets or credential_filler()
+        self._secrets: SecretFiller | None = secrets
         self._challenge_resolver = challenge_resolver
         self._clock = clock or (lambda: datetime.now(UTC))
         self._observation_phase = AuthPhase.ENTRY
+
+    def _secret_filler(self) -> SecretFiller:
+        if self._secrets is None:
+            self._secrets = credential_filler()
+        return self._secrets
 
     def rehydrate_profile(
         self,
@@ -156,8 +161,11 @@ class EconomistAcquisitionAdapter:
         challenge_mode: ChallengeMode,
     ) -> FlowCandidate:
         try:
-            self._resolve_challenge(browser, challenge_mode)
-            observation = self._observe_for_phase(browser, AuthPhase.ENTRY)
+            try:
+                self._resolve_challenge(browser, challenge_mode)
+                observation = self._observe_for_phase(browser, AuthPhase.ENTRY)
+            except _TransientNavigation:
+                observation = EconomistLoginObservation()
             if not (observation.username_visible and observation.password_visible):
                 observation = self._open_login_entry(
                     browser,
@@ -172,7 +180,7 @@ class EconomistAcquisitionAdapter:
                     MintFailureCategory.CONTROL_MISSING,
                 )
             with timing_step(TimingStep.USERNAME, provider=self.provider):
-                self._secrets.fill(
+                self._secret_filler().fill(
                     browser,
                     secret_ref=self._recipe.secret_ref,
                     field="username",
@@ -180,7 +188,7 @@ class EconomistAcquisitionAdapter:
                     allowed_origins=self._recipe.allowed_origins,
                 )
             with timing_step(TimingStep.PASSWORD, provider=self.provider):
-                self._secrets.fill(
+                self._secret_filler().fill(
                     browser,
                     secret_ref=self._recipe.secret_ref,
                     field="password",
@@ -592,7 +600,10 @@ class EconomistAcquisitionAdapter:
             deadline = time.monotonic() + _PAID_PROBE_TIMEOUT_SECONDS
             while time.monotonic() < deadline:
                 browser.wait(0.25)
-                self._resolve_challenge(browser, challenge_mode)
+                try:
+                    self._resolve_challenge(browser, challenge_mode)
+                except _TransientNavigation:
+                    continue
                 response = document.select(None)
                 current = (
                     observed

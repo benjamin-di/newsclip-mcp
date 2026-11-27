@@ -2352,3 +2352,26 @@ def test_teaser_verification_is_still_inconclusive(tmp_path):
     with pytest.raises(ProviderTransportError, match="^paid_probe_inconclusive$"):
         store.explicit_login("ft", allow_credential_mint=False)
     assert store.get_valid_session("ft") == prior
+
+
+def test_promote_browser_session_quarantines_corrupt_state_without_lock_order_error(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "state"
+    store = _store(root, recipe=BrowserPaidRecipe())
+    state_path = root / "sessions" / "ft" / "default.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("{corrupt-json", encoding="utf-8")
+
+    candidate = _artifact("promoted-browser").model_copy(
+        update={"schema_version": 2, "browser_profile_id": uuid4()}
+    )
+    store.promote_browser_session(
+        candidate,
+        _verification_fetch().model_copy(update={"serving_transport": "browser"}),
+        expected_generation=None,
+    )
+
+    assert store.get_valid_session("ft").generation_id == candidate.generation_id
+    quarantined = list(state_path.parent.glob("default.invalid.*.json"))
+    assert len(quarantined) == 1

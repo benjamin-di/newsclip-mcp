@@ -837,3 +837,31 @@ def test_current_invocation_rejects_invalid_environment(
     monkeypatch.setenv("NEWSCLIP_INVOCATION_ID", "private value with spaces")
 
     assert current_timing_invocation_id() is None
+
+
+def test_iter_timing_runs_ignores_corrupt_or_missing_unrelated_files(
+    tmp_path: Path,
+) -> None:
+    from newsclip.timing import _raw_timing_invocation_id, iter_timing_runs
+
+    root = tmp_path / "timings"
+    recorder = TimingRecorder(root, invocation_id="target-run")
+    with recorder.operation(
+        TimingOperation.GET,
+        provider="ft",
+        transport=TimingTransport.HTTP,
+    ) as operation:
+        pass
+
+    assert operation.path is not None
+    day_dir = operation.path.parent
+    (day_dir / "00-empty.jsonl").write_text("", encoding="utf-8")
+    (day_dir / "01-truncated.jsonl").write_text(
+        '{"invocation_id": "other', encoding="utf-8"
+    )
+    (day_dir / "02-bad-utf8.jsonl").write_bytes(b"\xff\xfe\xfd\n")
+
+    runs = list(iter_timing_runs(root, invocation_id="target-run"))
+
+    assert [run.invocation_id for run in runs] == ["target-run"]
+    assert _raw_timing_invocation_id(day_dir / "does-not-exist.jsonl") is None

@@ -761,3 +761,68 @@ def test_url_normalization_canonicalizes_owned_relative_url() -> None:
         )
         == ARTICLE_URL
     )
+
+
+def test_barrier_trailing_slash_matches_prefix_without_false_positive() -> None:
+    for barrier_url in (
+        "https://www.ft.com/barrier/",
+        "https://www.ft.com/barrier",
+        "https://www.ft.com/barrier/concurrency",
+    ):
+        assessment, _ = _assess("full.html", final_url=barrier_url)
+        assert assessment.access_state is AccessState.AUTH_REQUIRED
+        assert assessment.reason == "authentication_required"
+        assert "authentication_page" in assessment.negative_markers
+
+    sibling, _ = _assess("full.html", final_url="https://www.ft.com/barriers")
+    assert sibling.access_state is not AccessState.AUTH_REQUIRED
+    assert "authentication_page" not in sibling.negative_markers
+
+
+def test_non_owned_canonical_or_og_url_flags_canonical_conflict() -> None:
+    from lxml import html as lxml_html
+
+    from newsclip.assessment import canonical_urls
+
+    base_html = _fixture("full.html").decode("utf-8")
+    conflicted_html = base_html.replace(
+        "</head>",
+        '<meta property="og:url" content="https://evil.example/other"></head>',
+    ).encode("utf-8")
+    fetch = RawFetch(
+        requested_url=ARTICLE_URL,
+        final_url=ARTICLE_URL,
+        http_status=200,
+        content_type="text/html; charset=utf-8",
+        retrieved_at=NOW,
+        session_cookie_present=True,
+        raw_html=conflicted_html,
+    )
+    provider = FTProvider()
+    assessment = provider.assess(
+        ARTICLE_URL, fetch, TrafilaturaExtractor().extract(fetch)
+    )
+
+    assert assessment.access_state is AccessState.UNKNOWN
+    assert assessment.reason == "article_identity_mismatch"
+    assert assessment.identity_match is False
+    assert assessment.canonical_url is None
+    assert "canonical_conflict" in assessment.structural_signals
+
+    # Direct canonical_urls() callers keep receiving normalized owned URLs only.
+    direct = canonical_urls(
+        lxml_html.fromstring(conflicted_html), provider.normalize_url
+    )
+    assert direct == [ARTICLE_URL]
+
+    # Empty og:url values do not trigger a conflict.
+    empty_og_html = base_html.replace(
+        "</head>",
+        '<meta property="og:url" content="   "></head>',
+    ).encode("utf-8")
+    empty_fetch = fetch.model_copy(update={"raw_html": empty_og_html})
+    clean = provider.assess(
+        ARTICLE_URL, empty_fetch, TrafilaturaExtractor().extract(empty_fetch)
+    )
+    assert clean.access_state is AccessState.FULL
+    assert "canonical_conflict" not in clean.structural_signals

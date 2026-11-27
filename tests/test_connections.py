@@ -951,3 +951,204 @@ def test_shared_subscription_card_shows_owner_access_health_without_private_ids(
         page = unescape(client.get("/connections/").text)
         assert "Using alice's subscription (Degraded)" in page
         assert private_incident not in page
+
+
+def test_live_check_unexpected_exception_transitions_to_inconclusive(
+    accounts, tmp_path
+):
+    clock = [NOW.timestamp()]
+    app, _, _ = make_app(accounts, tmp_path)
+    origin = {"origin": "http://127.0.0.1"}
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        browser_login(app, client, "alice")
+        portal = app.state.connections
+        portal.clock = lambda: clock[0]
+        service = portal.adapters["alice"]._service_ready()
+        service._wall_clock = lambda: NOW
+        selected = store(portal.controls["alice"].root.parent)
+        service._sessions = selected
+        candidate, proof = material()
+        selected.promote_browser_session(candidate, proof, expected_generation=None)
+
+        def broken_checkpoint(_provider):
+            raise RuntimeError("unexpected failure")
+
+        service.session_checkpoint = broken_checkpoint
+        resp = client.post(
+            "/connections/check",
+            data={"provider": "fixture"},
+            headers=origin,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        portal.wait_checks()
+        status = client.get("/connections/status").json()["providers"][0]
+        assert status["last_check"]["state"] == "inconclusive"
+
+        # Subsequent check after cooldown is not wedged and can succeed.
+        clock[0] += 60
+        service.session_checkpoint = lambda _provider: None
+        resp = client.post(
+            "/connections/check",
+            data={"provider": "fixture"},
+            headers=origin,
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        portal.wait_checks()
+        status = client.get("/connections/status").json()["providers"][0]
+        assert status["last_check"]["state"] == "passed"
+
+
+def test_viewer_cancel_preserves_saving_session_and_cancels_relay_first(
+    accounts, tmp_path
+):
+    origin = {"origin": "http://127.0.0.1"}
+
+    # 1. Link already in "saving" must not rotate control revision.
+    app, _, backends = make_app(accounts, tmp_path / "already-saving")
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        browser_login(app, client)
+        url = owner_connection(client)
+        assert (
+            client.post(
+                url + "/start", json={"layout": "desktop"}, headers=origin
+            ).status_code
+            == 200
+        )
+        controls = app.state.connections.controls["alice"]
+        revision = controls.status("fixture")["revision"]
+        link = app.state.connections.links["alice", "fixture"]
+        link.state = "saving"
+        backends[0].window_state = "saving"
+
+        assert client.post(url + "/cancel", headers=origin).status_code == 204
+        assert controls.status("fixture")["revision"] == revision
+        with controls.publication("fixture", "default", revision=revision):
+            pass
+
+    # 2. Link transitioning to "saving" on backend before cancel completes
+    # must not rotate control revision.
+    app2, _, backends2 = make_app(accounts, tmp_path / "race-saving")
+    with TestClient(app2, base_url="http://127.0.0.1") as client:
+        browser_login(app2, client)
+        url = owner_connection(client)
+        assert (
+            client.post(
+                url + "/start", json={"layout": "desktop"}, headers=origin
+            ).status_code
+            == 200
+        )
+        controls = app2.state.connections.controls["alice"]
+        revision = controls.status("fixture")["revision"]
+        link = app2.state.connections.links["alice", "fixture"]
+        assert link.state in ("starting", "waiting")
+        backends2[0].window_state = "saving"
+
+        assert client.post(url + "/cancel", headers=origin).status_code == 204
+        assert link.state == "saving"
+        assert controls.status("fixture")["revision"] == revision
+        with controls.publication("fixture", "default", revision=revision):
+            pass
+
+    # 3. Normal "waiting" cancel calls relay.cancel before controls.cancel.
+    app3, _, _ = make_app(accounts, tmp_path / "normal-cancel")
+    with TestClient(app3, base_url="http://127.0.0.1") as client:
+        browser_login(app3, client)
+        url = owner_connection(client)
+        assert (
+            client.post(
+                url + "/start", json={"layout": "desktop"}, headers=origin
+            ).status_code
+            == 200
+        )
+        controls = app3.state.connections.controls["alice"]
+        relay = app3.state.connections.relays["alice"]
+        revision = controls.status("fixture")["revision"]
+        events: list[str] = []
+        orig_relay_cancel = relay.cancel
+        orig_controls_cancel = controls.cancel
+
+        def tracked_relay_cancel(*args, **kwargs):
+            events.append("relay.cancel")
+            return orig_relay_cancel(*args, **kwargs)
+
+        def tracked_controls_cancel(*args, **kwargs):
+            events.append("controls.cancel")
+            return orig_controls_cancel(*args, **kwargs)
+
+        relay.cancel = tracked_relay_cancel
+        controls.cancel = tracked_controls_cancel
+
+        assert client.post(url + "/cancel", headers=origin).status_code == 204
+        assert events == ["relay.cancel", "controls.cancel"]
+        assert controls.status("fixture")["revision"] != revision
+
+
+def test_controls_cancel_and_suspend_offloaded_to_dispatcher(accounts, tmp_path):
+    import asyncio
+
+    app, _, _ = make_app(accounts, tmp_path)
+    origin = {"origin": "http://127.0.0.1"}
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        browser_login(app, client)
+        portal = app.state.connections
+        controls = portal.controls["alice"]
+        on_loop: list[tuple[str, bool]] = []
+
+        orig_cancel = controls.cancel
+        orig_suspend = controls.suspend
+
+        def check_loop(name: str) -> None:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                on_loop.append((name, False))
+            else:
+                on_loop.append((name, True))
+
+        def wrapped_cancel(*args, **kwargs):
+            check_loop("cancel")
+            return orig_cancel(*args, **kwargs)
+
+        def wrapped_suspend(*args, **kwargs):
+            check_loop("suspend")
+            return orig_suspend(*args, **kwargs)
+
+        controls.cancel = wrapped_cancel
+        controls.suspend = wrapped_suspend
+
+        # 1. Viewer /cancel offloads controls.cancel.
+        url = owner_connection(client)
+        assert client.post(url + "/cancel", headers=origin).status_code == 204
+
+        # 2. Portal /connections/cancel offloads controls.cancel.
+        owner_connection(client)
+        revision = controls.status("fixture")["revision"]
+        assert (
+            client.post(
+                "/connections/cancel",
+                data={"provider": "fixture", "revision": revision},
+                headers=origin,
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+
+        # 3. Portal /connections/disconnect offloads controls.suspend.
+        selected = store(controls.root.parent)
+        candidate, proof = material()
+        selected.promote_browser_session(candidate, proof, expected_generation=None)
+        portal.adapters["alice"]._service_ready()._sessions = selected
+        revision = controls.status("fixture")["revision"]
+        assert (
+            client.post(
+                "/connections/disconnect",
+                data={"provider": "fixture", "revision": revision},
+                headers=origin,
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+
+        assert on_loop == [("cancel", False), ("cancel", False), ("suspend", False)]

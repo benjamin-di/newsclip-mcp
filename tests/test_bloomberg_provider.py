@@ -1019,6 +1019,28 @@ def test_url_normalization_canonicalizes_owned_relative_url() -> None:
     assert article_id(ARTICLE_URL) == ARTICLE_ID
 
 
+def test_url_normalization_lowercases_id_group_without_canonical_path() -> None:
+    mixed_case_url = (
+        "https://www.bloomberg.com/news/articles/2026-07-16/"
+        "Fixture-Chipmaker-Beats-Estimates"
+    )
+    assert normalize_article_url(mixed_case_url) == ARTICLE_URL
+
+    fetch = RawFetch(
+        requested_url=mixed_case_url,
+        final_url=mixed_case_url,
+        http_status=200,
+        content_type="text/html",
+        retrieved_at=NOW,
+        session_cookie_present=True,
+        raw_html=_with_full_story_bootstrap(),
+    )
+    native = BloombergProvider().native_extraction(mixed_case_url, fetch)
+    assert native.state is ProviderNativeExtractionState.VALID
+    assert native.assessment is not None
+    assert str(native.assessment.canonical_url) == ARTICLE_URL
+
+
 # --- Browser-plane integration -------------------------------------------
 
 

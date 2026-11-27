@@ -2141,3 +2141,91 @@ def test_handoff_failure_is_correlated_in_timing(tmp_path):
         service.get(ARTICLE_URL)
     runs = tuple(iter_timing_runs(tmp_path / "timings"))
     assert runs[0].finished.recovery.request_id == caught.value.recovery_id
+
+
+def test_import_cookies_prepares_browser_for_http_provider_with_browser_fallback():
+    provider = FakeProvider()
+    provider.capabilities = ProviderCapabilities(
+        requires_session_for_retrieve=True,
+        retrieval_transport="http",
+        retrieval_challenge_escalation="browser",
+    )
+    provider.login_recipe = object()
+
+    class StubSessions:
+        def __init__(self) -> None:
+            self.imported = False
+
+        def mark_account_alert(self, provider, account_key="default", **kwargs):
+            raise AssertionError("not used")
+
+        def import_cookies(self, provider_key: str, payload: object) -> None:
+            self.imported = True
+
+        def status(self, provider_key: str) -> SessionHealth:
+            return SessionHealth(
+                provider=provider_key,
+                account_key="default",
+                status=SessionStatus.VERIFIED,
+            )
+
+        def get_valid_session(self, provider: str, account_key: str = "default"):
+            raise AssertionError("not used")
+
+        def mark_required(
+            self,
+            provider: str,
+            account_key: str = "default",
+            *,
+            generation_id=None,
+        ) -> None:
+            raise AssertionError("not used")
+
+        def explicit_login(self, provider: str, **kwargs):
+            raise AssertionError("not used")
+
+        def reset_browser_profile(
+            self, provider: str, account_key: str = "default"
+        ) -> None:
+            raise AssertionError("not used")
+
+        def reset(self, provider: str, account_key: str = "default") -> None:
+            raise AssertionError("not used")
+
+        def clear(self, provider: str, account_key: str = "default") -> None:
+            raise AssertionError("not used")
+
+        def acknowledge(self, provider: str, account_key: str = "default") -> None:
+            raise AssertionError("not used")
+
+    from types import SimpleNamespace
+
+    sessions = StubSessions()
+    service = NewsclipService(
+        ProviderRegistry((provider,)),
+        FakeHttp(),
+        FakeExtractor(),
+        sessions=sessions,  # type: ignore[arg-type]
+        browser_retriever=SimpleNamespace(release=lambda: None),  # type: ignore[arg-type]
+    )
+    prepared: list[bool] = []
+
+    result = service.login(
+        "fixture",
+        cookie_payload=[{"name": "sid", "value": "v", "domain": ".example.com"}],
+        before_browser=lambda: prepared.append(True),
+    )
+
+    assert sessions.imported is True
+    assert prepared == [True]
+    assert result.status is SessionStatus.VERIFIED
+
+
+def test_maintenance_cycle_cli_rejects_max_age_hours_above_720():
+    result = CliRunner().invoke(
+        app,
+        ["maintenance-cycle", "--providers", "ft", "--max-age-hours", "721"],
+    )
+    assert result.exit_code == 2
+    output = result.stderr or result.stdout
+    assert "720" in output

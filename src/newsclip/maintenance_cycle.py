@@ -312,7 +312,7 @@ def run_maintenance_cycle(
         or mode not in {"keep", "check"}
         or not 1 <= timeout <= 86400
         or not 60 <= check_interval <= 365 * 86400
-        or not 0 < max_age_hours <= 8760
+        or not 0 < max_age_hours <= 720
     ):
         raise ValueError("invalid bounded maintenance configuration")
     from .tenancy import current_user, require_user

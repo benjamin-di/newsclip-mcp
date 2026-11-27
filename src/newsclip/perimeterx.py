@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
@@ -30,6 +30,7 @@ _COMPLETION_GRACE_SECONDS = 2.0
 # Mid-hold diagnostics: capture while the pointer is still down so operators can
 # see progress-fill vs spinner vs no reaction (pointer miss).
 _MID_HOLD_CAPTURE_SECONDS = 2.0
+_BOUNDING_BOX_TIMEOUT_MS = 1_000
 
 
 class _HoldReleaseReason(StrEnum):
@@ -117,7 +118,7 @@ class PerimeterXHoldMechanic:
                 break
             if holds_used >= self._max_holds:
                 break
-            box = control.bounding_box()
+            box = _control_bounding_box(control)
             if not box or box["width"] <= 0 or box["height"] <= 0:
                 page.wait_for_timeout(250)
                 continue
@@ -415,29 +416,69 @@ def _record_hold_evidence(
         return
 
 
+def _is_detached_frame(root: object) -> bool:
+    is_detached = getattr(root, "is_detached", None)
+    if not callable(is_detached):
+        return False
+    try:
+        return bool(is_detached())
+    except Exception:
+        return True
+
+
+def _control_bounding_box(control) -> Mapping[str, float] | None:
+    try:
+        try:
+            return control.bounding_box(timeout=_BOUNDING_BOX_TIMEOUT_MS)
+        except TypeError:
+            return control.bounding_box()
+    except Exception:
+        return None
+
+
 def _hold_control(page):
-    roots = [page, *tuple(getattr(page, "frames", ()))]
+    try:
+        frames = tuple(getattr(page, "frames", ()))
+    except Exception:
+        frames = ()
+    roots = [page, *frames]
     for root in roots:
+        if _is_detached_frame(root):
+            continue
         for selector in (
             "button:has-text('Press & Hold')",
             "button:has-text('Press and Hold')",
             "[role='button']:has-text('Press & Hold')",
             "[role='button']:has-text('Press and Hold')",
         ):
-            locator = root.locator(selector)
-            for index in range(locator.count()):
-                candidate = locator.nth(index)
-                if candidate.is_visible():
-                    return root, candidate
+            try:
+                locator = root.locator(selector)
+                count = locator.count()
+            except Exception:
+                continue
+            for index in range(count):
+                try:
+                    candidate = locator.nth(index)
+                    if candidate.is_visible():
+                        return root, candidate
+                except Exception:
+                    continue
         for selector in (
             "[data-px-captcha]",
             "#px-captcha",
         ):
-            locator = root.locator(selector)
-            for index in range(locator.count()):
-                candidate = locator.nth(index)
-                if candidate.is_visible() and _control_requires_hold(candidate):
-                    return root, candidate
+            try:
+                locator = root.locator(selector)
+                count = locator.count()
+            except Exception:
+                continue
+            for index in range(count):
+                try:
+                    candidate = locator.nth(index)
+                    if candidate.is_visible() and _control_requires_hold(candidate):
+                        return root, candidate
+                except Exception:
+                    continue
     return None, None
 
 
