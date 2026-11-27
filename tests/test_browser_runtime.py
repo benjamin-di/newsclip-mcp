@@ -2908,3 +2908,104 @@ def test_browser_open_reports_profile_contents_without_claiming_authentication(
         pass
     attempts = collect_live_evidence(tmp_path / "traces").attempts
     assert {attempt.profile_state for attempt in attempts} == {"new", "existing"}
+
+
+@pytest.mark.parametrize(
+    ("env_updates", "expect_virtual_display"),
+    [
+        (
+            {
+                "DISPLAY": ":109",
+                "NEWSCLIP_VIRTUAL_DISPLAY": "1",
+                "NEWSCLIP_INSIDE_BWRAP_XVFB": "1",
+                "NEWSCLIP_TIMING_SURFACE": SurfaceMode.DOCKER_XVFB_BWRAP.value,
+            },
+            False,
+        ),
+        (
+            {
+                "DISPLAY": ":99",
+                "NEWSCLIP_VIRTUAL_DISPLAY": "1",
+                "NEWSCLIP_TIMING_SURFACE": SurfaceMode.MANAGED_VIRTUAL.value,
+            },
+            False,
+        ),
+        (
+            {
+                "DISPLAY": "xvfb:99",
+                "NEWSCLIP_VIRTUAL_DISPLAY": "1",
+            },
+            False,
+        ),
+        (
+            {
+                "DISPLAY": ":109",
+                "NEWSCLIP_VIRTUAL_DISPLAY": "1",
+                "NEWSCLIP_TIMING_SURFACE": SurfaceMode.HOST_XVFB.value,
+            },
+            True,
+        ),
+    ],
+)
+def test_patchright_runtime_skips_host_xvfb_when_surface_already_isolated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_updates: dict[str, str],
+    expect_virtual_display: bool,
+) -> None:
+    import contextlib
+
+    import patchright.sync_api as patchright_sync
+
+    import newsclip.browser_runtime.runtime as runtime_mod
+
+    for var in (
+        "DISPLAY",
+        "NEWSCLIP_VIRTUAL_DISPLAY",
+        "NEWSCLIP_INSIDE_BWRAP_XVFB",
+        "NEWSCLIP_TIMING_SURFACE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    for key, value in env_updates.items():
+        monkeypatch.setenv(key, value)
+
+    monkeypatch.setattr(runtime_mod, "display_is_usable", lambda _d: True)
+    monkeypatch.setattr(runtime_mod, "is_system_desktop_display", lambda _d: False)
+    monkeypatch.setattr(runtime_mod.OwnedBrowserProcess, "capture", lambda _p: None)
+
+    virtual_display_calls = 0
+
+    @contextlib.contextmanager
+    def fake_virtual_display():
+        nonlocal virtual_display_calls
+        virtual_display_calls += 1
+        yield ":201"
+
+    monkeypatch.setattr(runtime_mod, "virtual_display", fake_virtual_display)
+
+    launch_envs: list[dict[str, str]] = []
+
+    class FakeChromium:
+        def launch_persistent_context(self, _profile, **kwargs):
+            launch_envs.append(dict(kwargs.get("env") or {}))
+            return FakeContext()
+
+    class FakeManager:
+        chromium = FakeChromium()
+
+        def stop(self) -> None:
+            pass
+
+    class FakeStarter:
+        def start(self) -> FakeManager:
+            return FakeManager()
+
+    monkeypatch.setattr(patchright_sync, "sync_playwright", lambda: FakeStarter())
+
+    runtime = PatchrightRuntime()
+    with runtime.open(tmp_path / "profile", require_virtual_display=True):
+        pass
+
+    assert (virtual_display_calls > 0) is expect_virtual_display
+    expected_display = ":201" if expect_virtual_display else env_updates["DISPLAY"]
+    assert launch_envs[0]["DISPLAY"] == expected_display

@@ -893,6 +893,7 @@ class BloombergAcquisitionAdapter:
         # mask the real error with a NameError.
         status: int | None = None
         callback = browser.for_page(original)
+        probe_failed = True
         try:
             observed = callback.navigate_observed(
                 _BLOOMBERG_GOOGLE_AUTH_ENDPOINT,
@@ -929,6 +930,7 @@ class BloombergAcquisitionAdapter:
                         if status != 403:
                             break
                         callback.wait(1)
+            probe_failed = False
         finally:
             # Capture evidence before restore navigation can lose the context.
             # Keep this in finally so a failed probe still reports what it saw.
@@ -938,12 +940,13 @@ class BloombergAcquisitionAdapter:
                 clearance_cookie_present=self._clearance_cookie_present(browser),
             )
             observe(clearance)
-            callback.navigate_loaded(
-                str(self._auth.login_url),
-                timeout_seconds=60,
-            )
-            callback.wait(2)
-            self._resolve_challenge(browser, challenge_mode)
+            if not probe_failed:
+                callback.navigate_loaded(
+                    str(self._auth.login_url),
+                    timeout_seconds=60,
+                )
+                callback.wait(2)
+                self._resolve_challenge(browser, challenge_mode)
         return clearance
 
     @staticmethod

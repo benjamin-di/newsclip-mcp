@@ -504,17 +504,25 @@ class RecoveryStore:
         """A pre-dispatch guard delays work without spending an attempt."""
         with self._locked(provider):
             record = self.load(provider)
-            if record is None or record.health.status is not RecoveryStatus.PENDING:
+            if record is None or record.health.status not in {
+                RecoveryStatus.PENDING,
+                RecoveryStatus.RUNNING,
+            }:
                 return
+            was_running = record.health.status is RecoveryStatus.RUNNING
             self._write(
                 record.model_copy(
                     update={
+                        "reconciliation_started": (
+                            record.reconciliation_started or was_running
+                        ),
                         "health": record.health.model_copy(
                             update={
+                                "status": RecoveryStatus.PENDING,
                                 "next_attempt_at": until,
                                 "reason": reason,
                             }
-                        )
+                        ),
                     }
                 )
             )

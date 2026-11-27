@@ -10,6 +10,7 @@ import re
 import sqlite3
 import stat
 import tempfile
+import unicodedata
 import zlib
 from collections.abc import Callable, Iterator
 from contextlib import suppress
@@ -231,12 +232,22 @@ class ArchiveStore:
         registry: ProviderRegistry | None = None,
         extractor: ExtractionEngine | None = None,
         fault_hook: Callable[[str], None] | None = None,
+        initialize: bool = True,
     ) -> None:
         self.path = Path(path)
         self._registry = registry
         self._extractor = extractor
         self._fault_hook = fault_hook
-        self._initialize()
+        if initialize:
+            self._initialize()
+
+    @classmethod
+    def restore_file(cls, target: Path, source: Path) -> ArchiveIntegrity:
+        """Restore an archive file without opening a possibly corrupted target first."""
+
+        store = cls(target, initialize=False)
+        store.restore(source)
+        return store.integrity_check()
 
     def save(
         self,
@@ -247,6 +258,7 @@ class ArchiveStore:
         extraction: ExtractedArticle,
         *,
         expected_current_extraction_id: int | None = None,
+        existing_fetch_id: int | None = None,
     ) -> Article | None:
         """Commit evidence and promote an article if its expected base is current."""
 
@@ -308,18 +320,28 @@ class ArchiveStore:
                 linked_article_id = self._existing_article_id(
                     connection, provider_key, assessment.provider_article_id
                 )
-                fetch_id = self._upsert_fetch(
-                    connection,
-                    provider_key=provider_key,
-                    article_id=linked_article_id,
-                    provider_article_id=assessment.provider_article_id,
-                    fetch=fetch,
-                    raw_sha256=raw_sha256,
-                    evidence_sha256=evidence_sha256,
-                    compressed=compressed,
-                    assessment_json=assessment_json,
-                    retrieved_at=retrieved_at,
-                )
+                if existing_fetch_id is not None:
+                    existing_fetch = connection.execute(
+                        "SELECT id FROM fetches "
+                        "WHERE id = ? AND provider = ? AND evidence_sha256 = ?",
+                        (existing_fetch_id, provider_key, evidence_sha256),
+                    ).fetchone()
+                    if existing_fetch is None:
+                        raise PersistenceError("archived fetch could not be found")
+                    fetch_id = int(existing_fetch["id"])
+                else:
+                    fetch_id = self._upsert_fetch(
+                        connection,
+                        provider_key=provider_key,
+                        article_id=linked_article_id,
+                        provider_article_id=assessment.provider_article_id,
+                        fetch=fetch,
+                        raw_sha256=raw_sha256,
+                        evidence_sha256=evidence_sha256,
+                        compressed=compressed,
+                        assessment_json=assessment_json,
+                        retrieved_at=retrieved_at,
+                    )
                 self._fault("after_fetch_before_commit")
                 if article is None:
                     return None
@@ -495,8 +517,8 @@ class ArchiveStore:
         connection = self._connect()
         try:
             row = connection.execute(
-                "SELECT e.id AS extraction_id, a.provider, f.requested_url, "
-                "f.final_url, f.http_status, "
+                "SELECT e.id AS extraction_id, f.id AS fetch_id, a.provider, "
+                "f.requested_url, f.final_url, f.http_status, "
                 "f.content_type, f.retry_after, f.retrieved_at, "
                 "f.session_cookie_present, f.serving_transport, "
                 "f.raw_sha256, f.evidence_sha256, "
@@ -589,6 +611,7 @@ class ArchiveStore:
             assessment,
             extraction,
             expected_current_extraction_id=row["extraction_id"],
+            existing_fetch_id=int(row["fetch_id"]),
         )
         if saved is None:  # pragma: no cover - guarded by the promotable check
             raise PersistenceError("accepted re-extraction was not saved")
@@ -723,6 +746,8 @@ class ArchiveStore:
             if source_connection.execute("PRAGMA foreign_key_check").fetchone():
                 raise PersistenceError("restore source is not a valid archive backup")
 
+            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.chmod(self.path.parent, 0o700)
             descriptor, staged_name = tempfile.mkstemp(
                 prefix=f".{self.path.name}.restore.",
                 suffix=".tmp",
@@ -757,10 +782,25 @@ class ArchiveStore:
                 raise PersistenceError(
                     "restore source is not a valid archive backup"
                 ) from error
-            destination = self._connect()
-            staged.backup(destination)
-            destination.commit()
-            destination.execute("PRAGMA journal_mode=WAL")
+            staged.commit()
+            staged.close()
+            staged = None
+            with staged_path.open("rb") as handle:
+                os.fsync(handle.fileno())
+            os.chmod(staged_path, 0o600)
+            with exclusive_lock(
+                self.path.parent / f".{self.path.name}.init.lock",
+                timeout_seconds=30,
+            ):
+                for sidecar in (Path(f"{self.path}-wal"), Path(f"{self.path}-shm")):
+                    sidecar.unlink(missing_ok=True)
+                os.replace(staged_path, self.path)
+                staged_path = None
+                os.chmod(self.path, 0o600)
+                _fsync_directory(self.path.parent)
+                destination = self._connect()
+                destination.execute("PRAGMA journal_mode=WAL")
+                destination.commit()
         except PersistenceError:
             raise
         except (sqlite3.Error, OSError) as error:
@@ -1277,7 +1317,8 @@ class ArchiveStore:
             "assessment_json, first_seen_at, last_seen_at"
             ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(provider, evidence_sha256) DO UPDATE SET "
-            "last_seen_at=excluded.last_seen_at, seen_count=fetches.seen_count + 1, "
+            "last_seen_at=MAX(fetches.last_seen_at, excluded.last_seen_at), "
+            "seen_count=fetches.seen_count + 1, "
             "assessment_json=excluded.assessment_json, "
             "provider_article_id=COALESCE(fetches.provider_article_id, "
             "excluded.provider_article_id), "
@@ -1500,7 +1541,8 @@ def _article_from_row(row: sqlite3.Row) -> Article:
 
 
 def _fts_query(query: str) -> str:
-    terms = re.findall(r"[^\W_]+", query, flags=re.UNICODE)
+    normalized = unicodedata.normalize("NFC", query)
+    terms = re.findall(r"[^\W_]+", normalized, flags=re.UNICODE)
     return " AND ".join(f'"{term.replace(chr(34), chr(34) * 2)}"' for term in terms)
 
 

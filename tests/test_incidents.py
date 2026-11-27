@@ -457,7 +457,10 @@ def test_incident_store_pruning_removes_corrupt_valid_entries(tmp_path: Path) ->
     store = IncidentStore(root, build_identity=_identity())
     corrupt = root / ("incident-" + "a" * 24)
     corrupt.mkdir(parents=True)
-    (corrupt / "incident.json").write_text("not json", encoding="utf-8")
+    (corrupt / "incident.json").write_text(
+        json.dumps({"provider": "ft", "corrupt": True}),
+        encoding="utf-8",
+    )
 
     store.record_assessed_retrieval(
         provider="ft",
@@ -483,7 +486,10 @@ def test_incident_store_pruning_preserves_unknown_schema_evidence(
     )
     corrupt = root / ("incident-" + "c" * 24)
     corrupt.mkdir(parents=True)
-    (corrupt / "incident.json").write_text("not json", encoding="utf-8")
+    (corrupt / "incident.json").write_text(
+        json.dumps({"provider": "ft", "corrupt": True}),
+        encoding="utf-8",
+    )
 
     store = IncidentStore(root, build_identity=_identity())
     with pytest.raises(IncidentSchemaUnsupportedError):
@@ -498,6 +504,42 @@ def test_incident_store_pruning_preserves_unknown_schema_evidence(
 
     assert newer.exists()
     assert not corrupt.exists()
+
+
+def test_incident_store_pruning_skips_unowned_or_other_provider_corrupt_entries(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "incidents"
+    other_provider_corrupt = root / ("incident-" + "d" * 24)
+    other_provider_corrupt.mkdir(parents=True)
+    (other_provider_corrupt / "incident.json").write_text(
+        json.dumps({"provider": "wsj", "corrupt": True}),
+        encoding="utf-8",
+    )
+    unattributable_corrupt = root / ("incident-" + "e" * 24)
+    unattributable_corrupt.mkdir(parents=True)
+    (unattributable_corrupt / "incident.json").write_text(
+        "not json",
+        encoding="utf-8",
+    )
+    same_provider_corrupt = root / ("incident-" + "f" * 24)
+    same_provider_corrupt.mkdir(parents=True)
+    (same_provider_corrupt / "incident.json").write_text(
+        json.dumps({"provider": "ft", "corrupt": True}),
+        encoding="utf-8",
+    )
+
+    store = IncidentStore(root, build_identity=_identity())
+    store.record_assessed_retrieval(
+        provider="ft",
+        operation=TimingOperation.GET,
+        fetch=_fetch(),
+        assessment=_assessment(),
+    )
+
+    assert other_provider_corrupt.exists()
+    assert unattributable_corrupt.exists()
+    assert not same_provider_corrupt.exists()
 
 
 def test_incident_store_pruning_preserves_infrastructure_read_failures(

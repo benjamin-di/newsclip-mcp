@@ -86,8 +86,7 @@ class LocalCliVisionPlanner:
         body = instruction.strip()
         if not body or len(body) > _MAX_INSTRUCTION_CHARACTERS:
             raise ValueError("vision instruction must be nonblank and bounded")
-        executable = shutil.which(self._provider)
-        if not image.is_file() or executable is None:
+        if not image.is_file():
             raise VisionPlanningError("vision planner is unavailable")
         image = image.resolve()
         companions = tuple(value.resolve() for value in companion_images)
@@ -100,13 +99,23 @@ class LocalCliVisionPlanner:
         deadline = time.monotonic() + timeout_seconds
         failure: BaseException | None = None
         provider: VisionProvider | None = self._provider
+        executable: str | None = shutil.which(self._provider)
+        any_executable = executable is not None
         while provider is not None:
-            plan, failure = self._attempt(
-                provider, executable, body, images, deadline, failure
-            )
-            if plan is not None:
-                return plan
-            provider, executable = self._fallback(provider, deadline)
+            if executable is not None:
+                plan, failure = self._attempt(
+                    provider, executable, body, images, deadline, failure
+                )
+                if plan is not None:
+                    return plan
+            else:
+                failure = VisionPlanningError("vision planner is unavailable")
+            provider, next_executable = self._fallback(provider, deadline)
+            executable = next_executable or None
+            if executable is not None:
+                any_executable = True
+        if not any_executable:
+            raise VisionPlanningError("vision planner is unavailable")
         raise VisionPlanningError("vision planner failed") from failure
 
     def _fallback(
@@ -135,20 +144,23 @@ class LocalCliVisionPlanner:
     ) -> tuple[VisualPlan | None, BaseException | None]:
         working_directory = images[0].parent
         body = instruction
-        if provider == "codex":
-            command = codex_vision_command(
-                executable,
-                working_directory=working_directory,
-                images=images,
-            )
-        else:
-            paths = ", ".join(str(value) for value in images)
-            body += f"\nUse the Read tool on these images in order: {paths}."
-            command = claude_vision_command(
-                executable,
-                working_directory=working_directory,
-                images=images,
-            )
+        try:
+            if provider == "codex":
+                command = codex_vision_command(
+                    executable,
+                    working_directory=working_directory,
+                    images=images,
+                )
+            else:
+                paths = ", ".join(str(value) for value in images)
+                body += f"\nUse the Read tool on these images in order: {paths}."
+                command = claude_vision_command(
+                    executable,
+                    working_directory=working_directory,
+                    images=images,
+                )
+        except ValueError as error:
+            return None, error
         for _ in range(2):
             remaining = deadline - time.monotonic()
             if remaining < 1.0:

@@ -40,6 +40,7 @@ from ..browser_verification import MainDocumentResponse, capture_verification_fe
 from ..challenge_resolver import ChallengeResolution, ChallengeResolver
 from ..challenges import ChallengeInfrastructureError
 from ..contracts import AuthBrowserSession, LoginRecipe, SecretFiller
+from ..errors import ProviderTransportError
 from ..login import LoginInfrastructureError, credential_filler
 from ..models import FrozenModel, MintOutcome, RawFetch, SessionArtifact
 from ..provider_config import ProviderSpec, load_provider_spec, validate_auth_surface
@@ -602,20 +603,23 @@ class EconomistAcquisitionAdapter:
                 browser.wait(0.25)
                 try:
                     self._resolve_challenge(browser, challenge_mode)
-                except _TransientNavigation:
+                except (_TransientNavigation, ProviderTransportError):
                     continue
-                response = document.select(None)
-                current = (
-                    observed
-                    if response is None
-                    else ObservedNavigation(
-                        response.status,
-                        response.url,
-                        response.headers.get("content-type"),
+                try:
+                    response = document.select(None)
+                    current = (
+                        observed
+                        if response is None
+                        else ObservedNavigation(
+                            response.status,
+                            response.url,
+                            response.headers.get("content-type"),
+                        )
                     )
-                )
-                fetch = self._browser_article_fetch(browser, current)
-                document.assert_current(response)
+                    fetch = self._browser_article_fetch(browser, current)
+                    document.assert_current(response)
+                except ProviderTransportError:
+                    continue
                 if self._recipe.verify_fetch(fetch).verified:
                     return fetch
         raise _failure(

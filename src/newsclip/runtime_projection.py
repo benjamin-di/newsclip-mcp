@@ -593,16 +593,7 @@ def _perimeterx_hold_blocked(hold: PerimeterXHoldEvent) -> bool | None:
 
     if hold.release_reason is PerimeterXHoldReleaseReason.INTERRUPTED:
         return None
-    if hold.final_surface_state is PerimeterXFinalSurfaceState.CLEARED:
-        return False
-    return (
-        hold.release_reason is PerimeterXHoldReleaseReason.REJECTED
-        or hold.final_surface_state
-        in {
-            PerimeterXFinalSurfaceState.REJECTED,
-            PerimeterXFinalSurfaceState.COMPLETED_CONTROL_PRESENT,
-        }
-    )
+    return hold.final_surface_state is not PerimeterXFinalSurfaceState.CLEARED
 
 
 def _record_invalid_trace(

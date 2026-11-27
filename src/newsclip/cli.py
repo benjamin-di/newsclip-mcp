@@ -32,6 +32,7 @@ from .acquisition import (
     MintFailureCategory,
     MintFailureStage,
 )
+from .archive import ArchiveStore
 from .browser_runtime import (
     BrowserRuntimeError,
     display_is_usable,
@@ -99,7 +100,7 @@ from .results import (
 )
 from .service import FederatedSearchPager, NewsclipService, _ordered_search_batch
 from .session_keeper import KeeperPolicy, KeeperResult
-from .tenancy import add_proxy_user, add_user, user_scope
+from .tenancy import add_proxy_user, add_user, application_root, user_scope
 
 Service = NewsclipService | NewsclipClient
 _CLIENT: ContextVar[NewsclipClient | None] = ContextVar(
@@ -113,6 +114,9 @@ def _remote_client() -> NewsclipClient | None:
 
 def build_service() -> Service:
     return _remote_client() or _local_service()
+
+
+_default_build_service = build_service
 
 
 def build_auth_service() -> Service:
@@ -1261,8 +1265,19 @@ def archive_restore(
 ) -> None:
     """Restore the working archive from a validated compatible backup."""
 
+    def run() -> ArchiveIntegrity:
+        client = _remote_client()
+        if client is not None:
+            return client.archive_restore(source)
+        if build_service is not _default_build_service:
+            return build_service().archive_restore(source)
+        archive_path = (
+            application_root("NEWSCLIP_DATA_HOME", ".local/share") / "archive.sqlite3"
+        )
+        return ArchiveStore.restore_file(archive_path, source)
+
     _execute(
-        lambda: build_service().archive_restore(source),
+        run,
         json_output=json_output,
         human_renderer=lambda result: _render_archive_integrity(
             result,

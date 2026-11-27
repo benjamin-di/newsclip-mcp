@@ -235,3 +235,57 @@ def test_existing_report_imports_remain_the_same_contracts():
 
     for name in ("LiveAttemptEvidence", "RuntimeEvidence", "RuntimeProviderEvidence"):
         assert getattr(reporting, name) is getattr(projection, name)
+
+
+@pytest.mark.parametrize(
+    ("release_reason", "final_surface_state", "expected"),
+    [
+        ("timeout", "spinner_or_loading", True),
+        ("timeout", "unknown", True),
+        ("completed", "spinner_or_loading", True),
+        ("completed", "unknown", True),
+        ("accepted", "cleared", False),
+        ("completed", "cleared", False),
+        ("rejected", "rejected", True),
+        ("completed", "completed_control_present", True),
+        ("interrupted", "unknown", None),
+    ],
+)
+def test_perimeterx_hold_blocked_treats_timeout_and_spinner_as_blocked(
+    release_reason: str,
+    final_surface_state: str,
+    expected: bool | None,
+) -> None:
+    from newsclip.browser_runtime.events import (
+        DurationBucket,
+        PerimeterXFinalSurfaceState,
+        PerimeterXGenerationRelation,
+        PerimeterXHoldEvent,
+        PerimeterXHoldReleaseReason,
+        PerimeterXPointerBackend,
+    )
+    from newsclip.challenges import ChallengeAcceptanceSource
+
+    interrupted = release_reason == "interrupted"
+    control_present = None if interrupted else (final_surface_state != "cleared")
+    hold = PerimeterXHoldEvent(
+        attempt_id="attempt-" + "a" * 32,
+        provider="wsj",
+        hold_index=1,
+        pointer_backend=PerimeterXPointerBackend.X11,
+        duration_bucket=DurationBucket.S1_TO_10,
+        release_reason=PerimeterXHoldReleaseReason(release_reason),
+        post_settle_acceptance_source=(
+            None if interrupted else ChallengeAcceptanceSource.NONE
+        ),
+        retry_invited=None if interrupted else False,
+        control_still_present=control_present,
+        generation_relation=(
+            PerimeterXGenerationRelation.UNAVAILABLE
+            if interrupted
+            else PerimeterXGenerationRelation.SAME
+        ),
+        final_surface_state=PerimeterXFinalSurfaceState(final_surface_state),
+    )
+
+    assert projection._perimeterx_hold_blocked(hold) is expected

@@ -3,6 +3,38 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.3.1] - 2026-11-27
+
+### Fixed
+
+- Require actual session-authority cookies (including exact `NYT-S` for NYT) during `human_signin`, guard transient navigation and URL states without permanently latching verification or reloading on cookie mutations, and capture post-navigation cookies.
+- Skip nested host `Xvfb` launch in `PatchrightRuntime._launch` when running under `DOCKER_XVFB_BWRAP`, `MANAGED_VIRTUAL`, or remote `DISPLAY` surfaces.
+- Exclude `connection_disconnected` and `connection_interactive` from automatic recovery requests, attach `incident_id` on corroborated assessed interactive challenges, preserve unretried federated search errors across buffered batches, defer subscription admission revalidation until preflight succeeds, and fix `OpsAdapter` heal state races.
+- Synchronize `TimingOperationContext` step teardown and FD close under lock so detached straggler search workers cannot race `os.close()` against `os.write()` or corrupt timing traces.
+- Fix `SessionKeeper` defense probe scoping and non-I/O blocker preflight under `SESSION_EVIDENCE_ACTIONS`, preserve post-renewal defense canary verdicts and supersession ordering in `KeeperOutcomeStore`, prioritize non-`CHECK_FAILED` attention actions over recovery waits, map `CHECK_IN_PROGRESS` to `BUSY`, defer orphaned `RUNNING` recoveries to stop `RecoveryWatch` 30-second spin loops, fix `LocalCliVisionPlanner` failover, and clean up failed `prepare_shadow_repair` worktrees.
+- Support atomic `ArchiveStore.restore()` and `newsclip archive-restore` over physically corrupted SQLite files, preserve `fetches.seen_count` and `last_seen_at` during offline `reextract()`, NFC-normalize FTS queries, prevent cross-provider deletion of corrupt incident directories, exclude `incidents/` snapshots and ancestor symlinks in live reporting, preserve `capture_too_large` omissions, use `exist_ok=True` in private directory creation, and classify non-cleared PerimeterX holds as blocked.
+- Track main-document commits and transient transport retries in Economist, WSJ, and NYT settle loops, avoid masking Bloomberg `CHALLENGE_BLOCKED` in `finally`, handle escaped brackets inside Axios hyperlinks, and parse XHTML/HTML bytes with resolved charset and libxml2 alias fallback in `TrafilaturaExtractor`.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.3.0, 2.2.5, and 2.2.4; no storage or configuration changes.
+
+## [2.3.0] - 2026-11-27
+
+### Changed
+
+- Rebuild the Connections pages on the `signin-window` 0.13 component kit: a status overview, one card per subscription with a status badge, facts and grouped actions, and clearer sharing rows. Routes, forms, hidden fields, status codes and sharing rules are unchanged.
+
+### Added
+
+- Show the shared "Apps" switcher and the collapsed "Assistant address (one for all services)" row when the optional `SIGNIN_WINDOW_SUITE` directory is configured. Refused and signed-out pages show neither.
+
+### Upgrade
+
+- Action required: None. The directory is optional and supplied by deployment configuration.
+- Rollback: compatible with `v2.2.5`.
+
 ## [2.2.5] - 2026-11-27
 
 ### Fixed

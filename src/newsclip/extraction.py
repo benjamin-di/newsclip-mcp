@@ -57,12 +57,17 @@ class TrafilaturaExtractor:
         the evidence ``build_article`` depends on.
         """
 
-        source = _decode_source(fetch)
+        charset = _resolve_charset(fetch)
+        source = fetch.raw_html.decode(charset, errors="replace")
         body_source = (
-            source if scope_xpath is None else _scoped_source(source, scope_xpath)
+            source
+            if scope_xpath is None
+            else _scoped_source(fetch.raw_html, scope_xpath, charset=charset)
         )
         body_markdown = "" if body_source is None else _body(body_source, fetch)
-        metadata = _metadata(source, str(fetch.final_url))
+        metadata = _metadata(
+            source, str(fetch.final_url), fetch.raw_html, charset=charset
+        )
         return ExtractedArticle(
             body_markdown=body_markdown,
             metadata=metadata,
@@ -70,7 +75,9 @@ class TrafilaturaExtractor:
         )
 
 
-def _decode_source(fetch: RawFetch) -> str:
+def _resolve_charset(fetch: RawFetch) -> str:
+    import codecs
+
     candidates = (
         _content_type_charset(fetch.content_type),
         _meta_charset(fetch.raw_html),
@@ -80,10 +87,15 @@ def _decode_source(fetch: RawFetch) -> str:
         if charset is None:
             continue
         try:
-            return fetch.raw_html.decode(charset, errors="replace")
+            codecs.lookup(charset)
+            return charset
         except LookupError:
             continue
-    return fetch.raw_html.decode("utf-8", errors="replace")
+    return "utf-8"
+
+
+def _decode_source(fetch: RawFetch) -> str:
+    return fetch.raw_html.decode(_resolve_charset(fetch), errors="replace")
 
 
 def _content_type_charset(content_type: str | None) -> str | None:
@@ -116,7 +128,35 @@ def _body(source: str, fetch: RawFetch) -> str:
     return (body or "").strip()
 
 
-def _scoped_source(source: str, scope_xpath: tuple[str, ...]) -> str | None:
+def _parse_html(raw_html: bytes, *, charset: str = "utf-8") -> etree._Element | None:
+    import codecs
+
+    candidates: list[str] = [charset]
+    try:
+        canonical = codecs.lookup(charset).name
+        if canonical not in candidates:
+            candidates.append(canonical)
+    except LookupError:
+        pass
+    for encoding in candidates:
+        try:
+            return html.fromstring(raw_html, parser=html.HTMLParser(encoding=encoding))
+        except LookupError:
+            continue
+        except (etree.ParserError, ValueError, TypeError):
+            return None
+    try:
+        return html.fromstring(raw_html)
+    except (etree.ParserError, ValueError, TypeError, LookupError):
+        return None
+
+
+def _scoped_source(
+    raw_html: bytes,
+    scope_xpath: tuple[str, ...],
+    *,
+    charset: str = "utf-8",
+) -> str | None:
     """Return the single in-scope subtree as a standalone document, or ``None``.
 
     ``None`` means the scope did not resolve to exactly one element, and the
@@ -132,9 +172,8 @@ def _scoped_source(source: str, scope_xpath: tuple[str, ...]) -> str | None:
     resolves the body.
     """
 
-    try:
-        document = html.fromstring(source)
-    except (etree.ParserError, ValueError, TypeError):
+    document = _parse_html(raw_html, charset=charset)
+    if document is None:
         return None
     matches = [
         node
@@ -148,7 +187,13 @@ def _scoped_source(source: str, scope_xpath: tuple[str, ...]) -> str | None:
     return f"<html><body>{subtree}</body></html>"
 
 
-def _metadata(source: str, url: str) -> dict[str, Any]:
+def _metadata(
+    source: str,
+    url: str,
+    raw_html: bytes,
+    *,
+    charset: str = "utf-8",
+) -> dict[str, Any]:
     import trafilatura
 
     document = trafilatura.extract_metadata(source, default_url=url)
@@ -173,7 +218,7 @@ def _metadata(source: str, url: str) -> dict[str, Any]:
 
     # FT's JSON-LD is useful metadata even when trafilatura omits a field. It is
     # evidence for assessment only when the provider independently validates it.
-    news_article = _news_article_json_ld(source)
+    news_article = _news_article_json_ld(raw_html, charset=charset)
     if news_article is not None:
         headline = news_article.get("headline")
         if "title" not in metadata and isinstance(headline, str) and headline.strip():
@@ -195,10 +240,13 @@ def _metadata(source: str, url: str) -> dict[str, Any]:
     return metadata
 
 
-def _news_article_json_ld(source: str) -> dict[str, Any] | None:
-    try:
-        document = html.fromstring(source)
-    except (etree.ParserError, ValueError, TypeError):
+def _news_article_json_ld(
+    raw_html: bytes,
+    *,
+    charset: str = "utf-8",
+) -> dict[str, Any] | None:
+    document = _parse_html(raw_html, charset=charset)
+    if document is None:
         return None
     # The shared selector every provider assessment uses, over the union of
     # their accepted types: an opinion page WSJ accepts keeps its metadata.

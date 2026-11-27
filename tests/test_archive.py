@@ -1539,3 +1539,100 @@ def test_restore_migrates_a_v3_backup_before_replacing_the_archive(
     assert store.integrity_check().user_version == SCHEMA_VERSION
     assert _fts_rows(path) == [(2, article.id)]
     assert store.search("VERSIONED_OUTPUT_SENTINEL") == [article]
+
+
+def test_restore_recovers_physically_corrupted_archive_and_stale_wal(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "data" / "archive.sqlite3"
+    store = _store(path)
+    article, fetch, assessment, extraction = _accepted()
+    store.save("ft", article, fetch, assessment, extraction)
+    backup = tmp_path / "backup" / "archive.sqlite3"
+    store.backup(backup)
+
+    # Corrupt the live database file and plant stale garbage WAL/SHM sidecars.
+    path.write_bytes(b"not a sqlite database at all" * 64)
+    Path(f"{path}-wal").write_bytes(b"corrupt wal sidecar")
+    Path(f"{path}-shm").write_bytes(b"corrupt shm sidecar")
+
+    # 1) Restoring via an existing ArchiveStore instance must succeed.
+    store.restore(backup)
+    assert store.integrity_check().ok is True
+    assert store.get(article.id) == article
+
+    # 2) Restoring via ArchiveStore.restore_file() when the file is corrupted
+    # before opening must also succeed without failing in _initialize().
+    path.write_bytes(b"\x00\xffcorrupt-archive-bytes" * 64)
+    Path(f"{path}-wal").write_bytes(b"corrupt wal sidecar 2")
+    Path(f"{path}-shm").write_bytes(b"corrupt shm sidecar 2")
+
+    integrity = ArchiveStore.restore_file(path, backup)
+    assert integrity.ok is True
+    assert _store(path).get(article.id) == article
+
+
+def test_reextract_preserves_fetch_seen_count_and_last_seen_at(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "data" / "archive.sqlite3"
+    store = _store(path)
+    t1 = NOW
+    t2 = NOW + timedelta(hours=2)
+    t0 = NOW - timedelta(hours=1)
+
+    article, fetch_t1, assessment, extraction = _accepted(_raw(retrieved_at=t1))
+    store.save("ft", article, fetch_t1, assessment, extraction)
+    # Re-observe the same fetch later: seen_count -> 2, last_seen_at -> t2.
+    article_t2, fetch_t2, assessment_t2, extraction_t2 = _accepted(
+        _raw(retrieved_at=t2)
+    )
+    store.save("ft", article_t2, fetch_t2, assessment_t2, extraction_t2)
+    # An older observation must not rewind last_seen_at.
+    article_t0, fetch_t0, assessment_t0, extraction_t0 = _accepted(
+        _raw(retrieved_at=t0)
+    )
+    store.save("ft", article_t0, fetch_t0, assessment_t0, extraction_t0)
+
+    with sqlite3.connect(path) as connection:
+        before_seen_count, before_last_seen = connection.execute(
+            "SELECT seen_count, last_seen_at FROM fetches"
+        ).fetchone()
+    assert before_seen_count == 3
+    assert before_last_seen == t2.isoformat()
+
+    reextracting = ArchiveStore(
+        path,
+        registry=ProviderRegistry((OfflineOnlyFTProvider(),)),
+        extractor=ChangedOutputExtractor(
+            f"{TrafilaturaExtractor().version}.fixture-v2"
+        ),
+    )
+    reextracting.reextract(article.id)
+
+    with sqlite3.connect(path) as connection:
+        after_seen_count, after_last_seen = connection.execute(
+            "SELECT seen_count, last_seen_at FROM fetches"
+        ).fetchone()
+    assert after_seen_count == before_seen_count
+    assert after_last_seen == before_last_seen
+
+
+def test_fts_query_normalizes_nfd_decomposed_unicode(tmp_path: Path) -> None:
+    import unicodedata
+
+    from newsclip.archive import _fts_query
+
+    nfd_query = unicodedata.normalize("NFD", "café résumé")
+    assert _fts_query(nfd_query) == '"café" AND "résumé"'
+
+    path = tmp_path / "data" / "archive.sqlite3"
+    store = _store(path)
+    base_fetch = _raw()
+    unicode_html = base_fetch.raw_html.replace(
+        b"</p>", b" caf\xc3\xa9 r\xc3\xa9sum\xc3\xa9.</p>", 1
+    )
+    unicode_fetch = base_fetch.model_copy(update={"raw_html": unicode_html})
+    article, fetch, assessment, extraction = _accepted(unicode_fetch)
+    store.save("ft", article, fetch, assessment, extraction)
+    assert store.search(nfd_query) == [article]

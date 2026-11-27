@@ -581,6 +581,8 @@ class _OperationState:
         self.write_failed = False
         self.lock = threading.Lock()
         self.trace_descriptor: int | None = None
+        self._finished = False
+        self._active_steps: dict[int, tuple[TimingStep, int, int]] = {}
 
     def start(self) -> None:
         timestamp = self.recorder._utc_now().strftime("%Y%m%dT%H%M%S.%fZ")
@@ -610,45 +612,61 @@ class _OperationState:
         self._prune(directory)
 
     def finish(self, outcome: TimingOutcome) -> None:
-        try:
+        with self.lock:
+            if self._finished:
+                return
+            self._finished = True
             try:
-                with self.lock:
-                    if (
-                        self.failure is not None
-                        and self.failure.category is MintFailureCategory.TIMEOUT
-                    ):
-                        outcome = TimingOutcome.TIMEOUT
-                    now_ns = self.recorder._monotonic_ns()
+                if (
+                    self.failure is not None
+                    and self.failure.category is MintFailureCategory.TIMEOUT
+                ):
+                    outcome = TimingOutcome.TIMEOUT
+                now_ns = self.recorder._monotonic_ns()
+                for step_id, (step, attempt, started_ns) in reversed(
+                    list(self._active_steps.items())
+                ):
                     self._write_locked(
-                        OperationFinishedEvent(
-                            operation=self.operation,
-                            outcome=outcome,
-                            duration_ns=now_ns - self.started_ns,
-                            acquisition_mode=self.acquisition_mode,
-                            failure_stage=(
-                                self.failure.stage
-                                if outcome is not TimingOutcome.SUCCESS and self.failure
-                                else None
-                            ),
-                            failure_category=(
-                                self.failure.category
-                                if outcome is not TimingOutcome.SUCCESS and self.failure
-                                else None
-                            ),
-                            browser_major=self.browser_major,
-                            content_assessment=self.content_assessment,
-                            incident=self.incident,
-                            browser_fallback_attempted=self.browser_fallback_attempted,
-                            # Only when true: ordinary records stay unchanged.
-                            browser_first=self.browser_first or None,
-                            recovery=self.recovery,
+                        StepFinishedEvent(
+                            step_id=step_id,
+                            step=step,
+                            attempt=attempt,
+                            outcome=TimingOutcome.TIMEOUT,
+                            duration_ns=now_ns - started_ns,
                         ),
                         now_ns=now_ns,
                     )
+                self._active_steps.clear()
+                self._write_locked(
+                    OperationFinishedEvent(
+                        operation=self.operation,
+                        outcome=outcome,
+                        duration_ns=now_ns - self.started_ns,
+                        acquisition_mode=self.acquisition_mode,
+                        failure_stage=(
+                            self.failure.stage
+                            if outcome is not TimingOutcome.SUCCESS and self.failure
+                            else None
+                        ),
+                        failure_category=(
+                            self.failure.category
+                            if outcome is not TimingOutcome.SUCCESS and self.failure
+                            else None
+                        ),
+                        browser_major=self.browser_major,
+                        content_assessment=self.content_assessment,
+                        incident=self.incident,
+                        browser_fallback_attempted=self.browser_fallback_attempted,
+                        # Only when true: ordinary records stay unchanged.
+                        browser_first=self.browser_first or None,
+                        recovery=self.recovery,
+                    ),
+                    now_ns=now_ns,
+                )
             except Exception:
                 self.write_failed = True
-        finally:
-            self._close_trace()
+            finally:
+                self._close_trace()
 
     def begin_step(
         self,
@@ -659,6 +677,8 @@ class _OperationState:
         if provider is not None and not is_provider_key(provider):
             raise ValueError("invalid timing provider key")
         with self.lock:
+            if self._finished or self.trace_descriptor is None:
+                return 0, 0, 0
             self.next_step_id += 1
             step_id = self.next_step_id
             key = (step, provider)
@@ -675,6 +695,8 @@ class _OperationState:
                 ),
                 now_ns=started_ns,
             )
+            if not self.write_failed:
+                self._active_steps[step_id] = (step, attempt, started_ns)
         return step_id, attempt, started_ns
 
     def finish_step(
@@ -687,6 +709,10 @@ class _OperationState:
         outcome: TimingOutcome,
     ) -> None:
         with self.lock:
+            if self._finished or self.trace_descriptor is None:
+                return
+            if self._active_steps.pop(step_id, None) is None:
+                return
             now_ns = self.recorder._monotonic_ns()
             self._write_locked(
                 StepFinishedEvent(
@@ -703,7 +729,15 @@ class _OperationState:
         """Write one event while ``self.lock`` establishes timeline order."""
 
         descriptor = self.trace_descriptor
-        if self.write_failed or self.path is None or descriptor is None:
+        if (
+            self.write_failed
+            or self.path is None
+            or descriptor is None
+            or (
+                self._finished
+                and not isinstance(event, (StepFinishedEvent, OperationFinishedEvent))
+            )
+        ):
             return
         try:
             sequence = self.sequence + 1

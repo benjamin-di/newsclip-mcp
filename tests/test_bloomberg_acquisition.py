@@ -4277,6 +4277,65 @@ def test_the_clearance_observation_is_reported_before_the_restore(
     assert seen[0].cleared is False
 
 
+def test_google_callback_challenge_blocked_is_not_masked_by_restore_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An active AcquisitionFailure must not be masked by finally restore navigation."""
+
+    class CallbackPage(ParentPage):
+        def __init__(self) -> None:
+            super().__init__()
+            self.restore_called = False
+
+        def goto(self, url: str, **kwargs) -> object:
+            self.url = url
+            if url.endswith("/google-auth"):
+                return type("Response", (), {"status": 403})()
+            self.restore_called = True
+            raise RuntimeError("restore navigation crashed")
+
+    page = CallbackPage()
+    browser = FakeBrowser()
+    browser.page = page
+    adapter = _adapter(tmp_path)
+
+    resolve_calls = 0
+
+    def fail_on_callback(*args, **kwargs):
+        nonlocal resolve_calls
+        resolve_calls += 1
+        if resolve_calls == 1:
+            return type(
+                "Resolution",
+                (),
+                {"status": ChallengeResolutionStatus.NOT_PRESENT, "reason": None},
+            )()
+        raise AcquisitionFailure(
+            MintOutcome.CHALLENGE_BLOCKED,
+            MintFailureEvidence(
+                stage=MintFailureStage.CHALLENGE,
+                category=MintFailureCategory.CHALLENGE_BLOCKED,
+            ),
+        )
+
+    monkeypatch.setattr(adapter, "_resolve_challenge", fail_on_callback)
+
+    seen: list = []
+    with pytest.raises(AcquisitionFailure) as caught:
+        adapter._resolve_google_callback_challenge(
+            browser,
+            original=page,
+            challenge_mode=ChallengeMode.AUTO,
+            observe=seen.append,
+        )
+
+    assert caught.value.outcome is MintOutcome.CHALLENGE_BLOCKED
+    assert not page.restore_called
+    assert len(seen) == 1
+    assert seen[0].probe_status == 403
+    assert seen[0].cleared is False
+
+
 class _TracePage:
     """Minimal page the handoff recorder can read parent state from."""
 

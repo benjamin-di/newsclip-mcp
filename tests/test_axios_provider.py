@@ -156,6 +156,22 @@ def test_short_full_article_preserves_links_nested_bullets_and_ending():
     assert "UNRELATED" not in body
 
 
+def test_story_with_brackets_inside_hyperlink_renders_cleanly():
+    intro = "Officials quoted the [Federal Reserve] report on national energy prices."
+    intro_html = (
+        'Officials quoted the <a href="https://example.org/fed">[Federal Reserve]</a> '
+        "report on national energy prices."
+    )
+    native = AxiosProvider().native_extraction(
+        URL, fetch(article_html(intro=intro, intro_html=intro_html))
+    )
+    assert native.state is ProviderNativeExtractionState.VALID
+    assert native.assessment.promotable
+    assert r"[\[Federal Reserve\]](https://example.org/fed)" in (
+        native.extraction.body_markdown
+    )
+
+
 @pytest.mark.parametrize(
     "tag,marker",
     [("strong", "**"), ("b", "**"), ("em", "*"), ("i", "*")],

@@ -865,3 +865,53 @@ def test_iter_timing_runs_ignores_corrupt_or_missing_unrelated_files(
 
     assert [run.invocation_id for run in runs] == ["target-run"]
     assert _raw_timing_invocation_id(day_dir / "does-not-exist.jsonl") is None
+
+
+def test_straggler_worker_steps_after_operation_finish_do_not_corrupt_trace(
+    tmp_path: Path,
+) -> None:
+    import threading
+
+    recorder = TimingRecorder(tmp_path / "timings")
+    step_entered = threading.Event()
+    release_worker = threading.Event()
+    worker_errors: list[BaseException] = []
+
+    def straggler() -> None:
+        try:
+            with timing_step(TimingStep.PROVIDER_SEARCH, provider="wsj"):
+                step_entered.set()
+                assert release_worker.wait(timeout=5)
+                # Starting a nested step after operation.finish() must be a safe no-op.
+                with timing_step(TimingStep.FETCH, provider="wsj"):
+                    pass
+        except BaseException as exc:  # noqa: BLE001
+            worker_errors.append(exc)
+
+    with recorder.operation(
+        TimingOperation.SEARCH,
+        provider="all",
+        transport=TimingTransport.HTTP,
+    ) as operation:
+        ctx = copy_context()
+        thread = threading.Thread(target=ctx.run, args=(straggler,))
+        thread.start()
+        assert step_entered.wait(timeout=5)
+
+    release_worker.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert worker_errors == []
+    assert operation.write_failed is False
+    assert operation.path is not None
+
+    run = read_timing_file(operation.path)
+    assert run.finished is not None
+    assert run.active_steps == ()
+    finished_steps = [
+        record.event
+        for record in run.records
+        if isinstance(record.event, StepFinishedEvent)
+    ]
+    assert len(finished_steps) == 1
+    assert finished_steps[0].step is TimingStep.PROVIDER_SEARCH

@@ -794,10 +794,10 @@ class NewsclipService:
                     reader, admission = routing.capture(provider.key)
                     readers[provider.key] = reader
                     if admission is not None:
+                        session = reader._search_session_for(provider)
                         validations.append(
                             partial(routing.access.revalidate, admission)
                         )
-                        session = reader._search_session_for(provider)
                         validations.append(
                             partial(
                                 reader._revalidate_search_session,
@@ -1545,7 +1545,11 @@ class NewsclipService:
                 enabled
                 and self._recovery_store is not None
                 and (
-                    isinstance(error, SessionRequiredError)
+                    (
+                        isinstance(error, SessionRequiredError)
+                        and str(error).strip()
+                        not in {"connection_disconnected", "connection_interactive"}
+                    )
                     or error.recovery_eligible
                     or read_failure_reason is not None
                 )
@@ -1648,20 +1652,23 @@ class NewsclipService:
                     origin="retrieval",
                 )
                 if observed is not None:
+                    incident_id = None
                     if observed.first_of_episode:
-                        self._record_retrieval_incident(
+                        incident_id = self._record_retrieval_incident(
                             provider,
                             TimingOperation.GET,
                             fetch,
                             assessment,
                         )
                     _record_content_failure(assessment)
-                    raise ProviderDefenseError(
+                    defense_error = ProviderDefenseError(
                         f"{provider.key} returned an interactive challenge",
                         provider=provider.key,
                         retry_after_seconds=observed.retry_after_seconds,
                         reason_code=assessment.reason,
                     )
+                    defense_error.incident_id = incident_id
+                    raise defense_error
             probe = self._non_full_session_probe(
                 provider, session, evaluation, TimingOperation.GET
             )
@@ -1831,20 +1838,23 @@ class NewsclipService:
             with timing_step(TimingStep.ARCHIVE, provider=provider.key):
                 archive.save(provider.key, None, fetch, assessment, extraction)
             if observed is not None:
+                incident_id = None
                 if observed.first_of_episode:
-                    self._record_retrieval_incident(
+                    incident_id = self._record_retrieval_incident(
                         provider,
                         TimingOperation.SAVE,
                         fetch,
                         assessment,
                     )
                 _record_content_failure(assessment)
-                raise ProviderDefenseError(
+                defense_error = ProviderDefenseError(
                     f"{provider.key} returned an interactive challenge",
                     provider=provider.key,
                     retry_after_seconds=observed.retry_after_seconds,
                     reason_code=assessment.reason,
                 )
+                defense_error.incident_id = incident_id
+                raise defense_error
             probe = self._non_full_session_probe(
                 provider, session, evaluation, TimingOperation.SAVE
             )
@@ -2788,8 +2798,6 @@ class FederatedSearchPager:
         if size < 1 or size > 100:
             raise UsageError("search batch size must be between 1 and 100")
 
-        for state in self._states:
-            state.retryable_error = None
         fetch_counts = {state.provider.key: 0 for state in self._states}
         results: list[SearchResult] = []
         deadline = time.monotonic() + self._BATCH_DEADLINE_SECONDS
@@ -2807,7 +2815,9 @@ class FederatedSearchPager:
             waiting = tuple(
                 state
                 for state in self._states
-                if self._needs_fetch(state)
+                if self._needs_fetch(
+                    state, fetched_in_batch=fetch_counts[state.provider.key]
+                )
                 and fetch_counts[state.provider.key]
                 < self._MAX_PROVIDER_FETCHES_PER_BATCH
             )
@@ -2847,12 +2857,12 @@ class FederatedSearchPager:
         )
 
     @staticmethod
-    def _needs_fetch(state: _ProviderPagerState) -> bool:
+    def _needs_fetch(state: _ProviderPagerState, *, fetched_in_batch: int = 0) -> bool:
         return (
             not state.buffer
             and not state.exhausted
             and state.terminal_error is None
-            and state.retryable_error is None
+            and (state.retryable_error is None or fetched_in_batch == 0)
             and (not state.started or state.next_url is not None)
         )
 
@@ -2863,6 +2873,9 @@ class FederatedSearchPager:
         *,
         deadline: float,
     ) -> None:
+        for state in states:
+            state.retryable_error = None
+
         def run(
             state: _ProviderPagerState,
             next_url: str | None,

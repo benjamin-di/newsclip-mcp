@@ -60,7 +60,7 @@ def render_story(parsed: html.HtmlElement, story: dict[str, Any]) -> str:
         raise ValueError("axios_blocks_missing") from error
     if not isinstance(blocks, list) or not blocks:
         raise ValueError("axios_blocks_missing")
-    plain = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", body)
+    plain = re.sub(r"\[((?:\\.|[^\]\\])*)\]\([^)]*\)", r"\1", body)
     plain = re.sub(r"\\([\\`*\[\]_])", r"\1", plain)
     remaining = _words(plain)
     count = 0

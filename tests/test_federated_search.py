@@ -1192,3 +1192,97 @@ def test_provider_defense_survives_federation_and_response_roundtrip():
     assert source.reason == "provider_defense"
     assert source.state is SourceSearchState.UNAVAILABLE
     assert "private response" not in response.model_dump_json()
+
+
+def test_timed_out_federated_search_writes_valid_timing_trace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from newsclip.timing import TimingRecorder, read_timing_file
+
+    monkeypatch.setattr(FederatedSearchPager, "_BATCH_DEADLINE_SECONDS", 0.15)
+    recorder = TimingRecorder(tmp_path / "timings")
+    slow = StallingSearchProvider("slow", [_result("slow", "one")])
+    fast = SearchProvider("fast", [_result("fast", "one")])
+    service = NewsclipService(
+        ProviderRegistry((slow, fast)),
+        object(),
+        object(),
+        timing=recorder,
+    )
+    pager = service.search_pager("markets", SearchFilters(limit=5))
+
+    try:
+        response = pager.next_batch(5)
+        assert [item.provider for item in response.results] == ["fast"]
+    finally:
+        slow.release.set()
+        assert slow.finished.wait(timeout=5)
+
+    trace_files = list((tmp_path / "timings").rglob("*.jsonl"))
+    assert len(trace_files) == 1
+    run = read_timing_file(trace_files[0])
+    assert run.finished is not None
+    assert run.active_steps == ()
+
+
+def test_next_batch_preserves_retryable_error_when_provider_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(FederatedSearchPager, "_BATCH_DEADLINE_SECONDS", 0.15)
+    slow = StallingSearchProvider("slow", [_result("slow", "one")])
+    fast_a = SearchProvider("fast_a", [_result("fast_a", "one")])
+    fast_b = SearchProvider("fast_b", [_result("fast_b", "one")])
+    pager = _service(slow, fast_a, fast_b).search_pager(
+        "markets", SearchFilters(limit=5)
+    )
+
+    try:
+        first = pager.next_batch(1)
+        first_reports = {s.provider: s for s in first.sources}
+        assert len(first.results) == 1
+        assert first_reports["slow"].state is SourceSearchState.UNAVAILABLE
+        assert first_reports["slow"].reason is SourceSearchReason.TIMEOUT
+
+        # Batch 2 is satisfied entirely from _pending_band (the other fast
+        # provider's result), so slow is never scheduled/retried and must keep
+        # its timeout error.
+        second = pager.next_batch(1)
+        second_reports = {s.provider: s for s in second.sources}
+        assert len(second.results) == 1
+        assert second_reports["slow"].state is SourceSearchState.UNAVAILABLE
+        assert second_reports["slow"].reason is SourceSearchReason.TIMEOUT
+    finally:
+        slow.release.set()
+        assert slow.finished.wait(timeout=5)
+
+
+def test_search_pager_skips_revalidation_for_failed_preflight_provider() -> None:
+    gated = SearchProvider("gated", requires_session=True)
+    healthy = SearchProvider("healthy", [_result("healthy", "one")])
+    service = _service(gated, healthy)
+
+    revalidated: list[str] = []
+
+    class _Access:
+        def revalidate(self, admission: str) -> None:
+            revalidated.append(admission)
+            if admission == "gated-admission":
+                raise SessionRequiredError("connection_disconnected")
+
+    class _Routing:
+        access = _Access()
+
+        def capture(self, provider_key: str):
+            return service, f"{provider_key}-admission"
+
+    service._subscription_routing = _Routing()  # noqa: SLF001
+
+    pager = service.search_pager("markets", SearchFilters(limit=5))
+    response = pager.next_batch(5)
+
+    assert [item.provider for item in response.results] == ["healthy"]
+    assert revalidated == ["healthy-admission"]
+    reports = {s.provider: s for s in response.sources}
+    assert reports["gated"].state is SourceSearchState.NEEDS_ATTENTION
+    assert reports["healthy"].state is SourceSearchState.OK

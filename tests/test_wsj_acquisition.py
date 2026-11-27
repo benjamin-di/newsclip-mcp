@@ -984,3 +984,83 @@ def test_passive_datadome_awaits_a_device_check_that_clears_itself() -> None:
 
     assert result.accepted is True
     assert page.mouse.down_calls == 0
+
+
+def test_settle_verification_tracks_redirect_and_retries_transport_error() -> None:
+    redirected_url = f"{ARTICLE_URL}?mod=sso_callback"
+
+    class RedirectingPage(FakePage):
+        def __init__(self, html: str) -> None:
+            super().__init__(html)
+            self.main_frame = self
+            self._handlers: dict[str, list] = {}
+
+        def on(self, event: str, handler) -> None:
+            self._handlers.setdefault(event, []).append(handler)
+
+        def remove_listener(self, event: str, handler) -> None:
+            handlers = self._handlers.get(event, [])
+            if handler in handlers:
+                handlers.remove(handler)
+
+        def emit_navigation(self, url: str, status: int = 200) -> None:
+            self.url = url
+            response = type(
+                "Response",
+                (),
+                {
+                    "url": url,
+                    "status": status,
+                    "headers": {"content-type": "text/html"},
+                    "frame": self.main_frame,
+                    "request": type(
+                        "Request", (), {"is_navigation_request": lambda self: True}
+                    )(),
+                },
+            )()
+            for handler in list(self._handlers.get("response", [])):
+                handler(response)
+            for handler in list(self._handlers.get("framenavigated", [])):
+                handler(self.main_frame)
+
+    full_html = (FIXTURES / "verification_full.html").read_text(encoding="utf-8")
+    page = RedirectingPage(full_html)
+    browser = FakeBrowser(
+        [{"authenticated": True}, {"authenticated": True}],
+        cookies=[
+            {
+                "name": "djcs_session",
+                "value": "fixture-token",
+                "domain": ".wsj.com",
+                "path": "/",
+                "expires": FUTURE,
+            }
+        ],
+    )
+    browser.page = page
+
+    wait_calls = 0
+    original_wait = browser.wait
+
+    def wait_with_redirect(seconds: float) -> None:
+        nonlocal wait_calls
+        original_wait(seconds)
+        wait_calls += 1
+        if wait_calls == 2:
+            # First authenticated check sees an uncommitted redirect URL.
+            page.url = redirected_url
+        elif wait_calls == 4:
+            # Next poll commits the redirected main-document response.
+            page.emit_navigation(redirected_url, 200)
+
+    browser.wait = wait_with_redirect  # type: ignore[method-assign]
+
+    adapter = WSJAcquisitionAdapter(
+        recipe=WSJLoginRecipe(verification_url=ARTICLE_URL),
+        challenge_resolver=ChallengeResolver({}),
+        clock=lambda: NOW,
+    )
+    fetch = adapter._settle_verification_context(browser, ChallengeMode.DETECT_ONLY)
+
+    assert str(fetch.final_url) == redirected_url
+    assert adapter._recipe.verify_fetch(fetch).verified

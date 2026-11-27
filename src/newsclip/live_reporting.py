@@ -825,11 +825,15 @@ def _validated_incident(run: TimingRun, trace_root: Path) -> IncidentEvidence | 
             }
             and capsule.diagnostic_id == run.records[0].invocation_id
         )
+        capture_missing = store.capture_path(capsule) is None and not (
+            incident.omission == "capture_too_large"
+            and capsule.capture_available is False
+        )
         if (
             capsule.provider != run.started.provider
             or (capsule.operation is not run.started.operation and not login_probe)
             or capsule.build_identity != store.build_identity
-            or store.capture_path(capsule) is None
+            or capture_missing
         ):
             raise ValueError("incident does not match operation evidence")
         store.load_context(capsule)
@@ -904,7 +908,11 @@ def _load_runtime_traces(trace_root: Path) -> Iterable[RuntimeTraceEvidence]:
     trace_root = Path(trace_root)
     attempt_ids: set[str] = set()
     for path in sorted(trace_root.rglob("*.jsonl")):
-        if path.is_symlink() or not path.is_file():
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or _is_incident_artifact(trace_root, path)
+        ):
             continue
         path_provider = _trace_provider(trace_root, path)
         try:
@@ -1466,17 +1474,41 @@ def diagnosis_for_provider(
     )
 
 
+def _is_incident_artifact(trace_root: Path, path: Path) -> bool:
+    try:
+        relative = path.relative_to(trace_root)
+    except ValueError:
+        return False
+    return "incidents" in relative.parts
+
+
+def _has_symlink_within_root(root: Path, path: Path) -> bool:
+    current = path
+    while current != root:
+        if current.is_symlink():
+            return True
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return False
+
+
 def _artifact_summary(trace_root: Path, runs: Sequence[TimingRun]) -> ArtifactSummary:
     trace_root = Path(trace_root)
     runtime_files = tuple(
         path
         for path in trace_root.rglob("*.jsonl")
-        if path.is_file() and not path.is_symlink()
+        if path.is_file()
+        and not path.is_symlink()
+        and not _is_incident_artifact(trace_root, path)
     )
     screenshots = tuple(
         path
         for path in trace_root.rglob("*.png")
-        if path.is_file() and not path.is_symlink()
+        if path.is_file()
+        and not path.is_symlink()
+        and not _is_incident_artifact(trace_root, path)
     )
     instructions = tuple(
         path
@@ -1487,8 +1519,7 @@ def _artifact_summary(trace_root: Path, runs: Sequence[TimingRun]) -> ArtifactSu
         path
         for name in ("incident.json", "context.json", "capture.html")
         for path in trace_root.glob(f"*/incidents/incident-*/{name}")
-        if path.is_file()
-        and not any(parent.is_symlink() for parent in (path, *path.parents))
+        if path.is_file() and not _has_symlink_within_root(trace_root, path)
     )
     references = tuple(
         sorted(
@@ -1731,7 +1762,9 @@ def _ensure_private_directory(path: Path) -> None:
         if candidate.is_symlink():
             raise OSError("private live evidence directory is invalid")
         for directory in reversed(missing):
-            directory.mkdir(mode=0o700)
+            directory.mkdir(mode=0o700, exist_ok=True)
+            if directory.is_symlink() or not directory.is_dir():
+                raise OSError("private live evidence directory is invalid")
             os.chmod(directory, 0o700)
         if path.is_symlink() or not path.is_dir():
             raise OSError("private live evidence directory is invalid")

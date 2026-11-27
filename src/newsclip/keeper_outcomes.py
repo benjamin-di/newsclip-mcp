@@ -265,16 +265,16 @@ class KeeperOutcomeStore:
             revision = result.renewal_revision
             if revision is not None and revision > issued:
                 raise PersistenceError("renewal outcome observation was not issued")
-            renewal_event = result.action.value in {*_RESET_ACTIONS, *_ERROR_ACTIONS}
+            resets_session = (
+                result.action.value in _RESET_ACTIONS or result.session_proof_verified
+            )
+            renewal_event = resets_session or result.action.value in _ERROR_ACTIONS
             if renewal_event and revision is None:
                 revision = issued + 1
             if (
                 revision is not None
                 and prior is not None
-                and (
-                    revision <= applied
-                    or (result.action.value in _RESET_ACTIONS and revision < issued)
-                )
+                and (revision <= applied or (resets_session and revision < issued))
             ):
                 # A service verification already applied this success, or a
                 # newer observation superseded this delayed/replayed result.
@@ -304,10 +304,7 @@ class KeeperOutcomeStore:
                 if prior
                 else None
             )
-            if (
-                result.action.value in _RESET_ACTIONS
-                and result.status is SessionStatus.VERIFIED
-            ):
+            if resets_session and result.status is SessionStatus.VERIFIED:
                 streak = 0
                 inconclusive = 0
                 incident_id = None

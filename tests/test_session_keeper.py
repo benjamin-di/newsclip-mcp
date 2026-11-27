@@ -2021,3 +2021,279 @@ def test_canaries_pause_under_connection_blocker_without_provider_io(
         record = store.load("ft")
         assert record.health.status is RecoveryStatus.PENDING
         assert record.health.attempts == 0
+
+
+def test_session_required_false_recovery_under_defense_shares_probe_scope(tmp_path):
+    from contextlib import contextmanager
+
+    from test_provider_guard import _check, _guard
+
+    from newsclip.defense import BASE_COOLDOWN_SECONDS, DefenseState
+    from newsclip.errors import ProviderDefenseError, SessionRequiredError
+
+    clock = [NOW]
+    defense = DefenseState(tmp_path / "provider-defense", utc_now=lambda: clock[0])
+    defense.arm("ft", origin="retrieval")
+    clock[0] += timedelta(seconds=BASE_COOLDOWN_SECONDS + 1)
+
+    guard, _ = _guard(tmp_path)
+    guard.run("ft", lambda: _check(failure=ProviderCheckFailure.SESSION_REQUIRED))
+
+    sessions = RecoverySessions(needs_credentials=False)
+    sessions.defense_pending = lambda provider: defense.status(provider) is not None
+    sessions.defense_contained_until = lambda provider: (
+        status.active_until
+        if (status := defense.status(provider)) is not None
+        and status.active_until > clock[0]
+        else None
+    )
+    scopes: list[str] = []
+
+    @contextmanager
+    def recovery_scope(provider):
+        with defense.probe(provider) as decision:
+            if not decision.allowed:
+                raise ProviderDefenseError(
+                    "cooldown",
+                    provider=provider,
+                    retry_after_seconds=decision.retry_after_seconds,
+                )
+            scopes.append(provider)
+            yield
+
+    sessions.session_recovery_scope = recovery_scope
+    article_calls = 0
+
+    def verify_article(provider, url):
+        nonlocal article_calls
+        article_calls += 1
+        with defense.probe(provider) as decision:
+            if not decision.allowed:
+                raise ProviderDefenseError(
+                    "cooldown",
+                    provider=provider,
+                    retry_after_seconds=decision.retry_after_seconds,
+                )
+            sessions.article_checks.append(url)
+            if article_calls == 1:
+                raise SessionRequiredError("login_required")
+
+    original_login = sessions.login
+
+    def verified_login(*args, **kwargs):
+        hold_id = guard.session_evidence_target("ft")
+        result = original_login(*args, **kwargs)
+        guard.clear_session_evidence("ft", hold_id=hold_id)
+        return result
+
+    def full_proof(provider):
+        with defense.probe(provider) as nested:
+            assert nested.allowed
+            defense.clear(provider)
+            sessions.checks.append(provider)
+            return _check(failure=None)
+
+    sessions.verify_recovery_article = verify_article
+    sessions.login = verified_login
+    sessions.provider_check = full_proof
+
+    keeper, _, store, _, _ = _recovery_keeper(
+        tmp_path, sessions=sessions, session_required=False
+    )
+    keeper._guard = guard
+    keeper._utc_now = lambda: clock[0]
+
+    result = keeper.keep("ft", allow_credential_mint=False, recovery_only=True)
+    assert result.action is KeeperAction.RENEWED
+    assert result.recovery.session_verified is True
+    assert result.recovery.article_verified is True
+    assert scopes == ["ft"]
+    assert sessions.logins == [False]
+    assert defense.status("ft") is None
+
+
+@pytest.mark.parametrize(
+    "blocker_kind",
+    [
+        "connection_blocker",
+        "operator_action",
+        "session_cooldown",
+        "exhausted_escalation",
+    ],
+)
+def test_keep_under_defense_checks_non_io_blockers_before_probe_gate(
+    tmp_path, blocker_kind: str
+):
+    from contextlib import contextmanager
+
+    from test_provider_guard import _check, _guard
+
+    from newsclip.defense import BASE_COOLDOWN_SECONDS, DefenseState
+    from newsclip.errors import ProviderDefenseError
+
+    clock = [NOW]
+    defense = DefenseState(tmp_path / "provider-defense", utc_now=lambda: clock[0])
+    defense.arm("ft", origin="retrieval")
+    clock[0] += timedelta(seconds=BASE_COOLDOWN_SECONDS + 1)
+    before = defense.status("ft")
+    assert before is not None and before.active_until < clock[0]
+
+    guard, _ = _guard(tmp_path)
+    guard.run("ft", lambda: _check(failure=ProviderCheckFailure.SESSION_REQUIRED))
+
+    outcomes = KeeperOutcomeStore(tmp_path / "session-keeper", utc_now=lambda: clock[0])
+    if blocker_kind == "connection_blocker":
+        sessions = FakeSessions(status=SessionStatus.OPERATOR_ACTION)
+        sessions.session_status = lambda provider_key: SessionHealth(
+            provider=provider_key,
+            account_key="default",
+            status=SessionStatus.OPERATOR_ACTION,
+            failure_reason_code="account_not_connected",
+        )
+    elif blocker_kind == "operator_action":
+        sessions = FakeSessions(status=SessionStatus.OPERATOR_ACTION)
+        sessions.session_status = lambda provider_key: SessionHealth(
+            provider=provider_key,
+            account_key="default",
+            status=SessionStatus.OPERATOR_ACTION,
+            failure_reason_code="account_alert",
+        )
+    elif blocker_kind == "session_cooldown":
+        sessions = FakeSessions(
+            status=SessionStatus.COOLDOWN,
+            retry_not_before=clock[0] + timedelta(minutes=30),
+        )
+    else:
+        sessions = FakeSessions(last_verified_at=clock[0] - timedelta(days=2))
+        for _ in range(3):
+            outcomes.record(
+                KeeperResult(
+                    provider="ft",
+                    action=KeeperAction.RENEWAL_FAILED,
+                    reason_code="paid_probe_inconclusive",
+                ),
+                max_age_hours=12,
+            )
+        assert outcomes.spend_escalation_canary("ft") is True
+
+    sessions.defense_pending = lambda provider: defense.status(provider) is not None
+    scopes: list[str] = []
+
+    @contextmanager
+    def recovery_scope(provider):
+        with defense.probe(provider) as decision:
+            if not decision.allowed:
+                raise ProviderDefenseError(
+                    "cooldown",
+                    provider=provider,
+                    retry_after_seconds=decision.retry_after_seconds,
+                )
+            scopes.append(provider)
+            yield
+
+    sessions.session_recovery_scope = recovery_scope
+    keeper, _, _ = _keeper(
+        tmp_path,
+        sessions=sessions,
+        guard=guard,
+        outcomes=outcomes,
+    )
+    keeper._utc_now = lambda: clock[0]
+    result = keeper.keep("ft", allow_credential_mint=True)
+
+    assert scopes == []
+    after = defense.status("ft")
+    assert after is not None and after.active_until == before.active_until
+    if blocker_kind == "session_cooldown":
+        assert result.action is KeeperAction.COOLDOWN
+    else:
+        assert result.action is KeeperAction.OPERATOR_ACTION_REQUIRED
+
+
+def test_active_automatic_recovery_does_not_suppress_renewal_failure_attention(
+    tmp_path, monkeypatch
+):
+    from typer.testing import CliRunner
+
+    from newsclip.cli import app
+    from newsclip.errors import ContentNotFullError
+    from newsclip.session_keeper import KeeperNextAction
+
+    keeper, sessions, _, _, _ = _recovery_keeper(
+        tmp_path,
+        RecoverySessions(
+            last_verified_at=NOW - timedelta(days=2),
+            needs_credentials=True,
+            article_failure=ContentNotFullError("paywall_teaser"),
+        ),
+    )
+    keeper.keep("ft", allow_credential_mint=True, recovery_only=True)
+
+    result = keeper.keep("ft", allow_credential_mint=False)
+    assert result.action is KeeperAction.OPERATOR_ACTION_REQUIRED
+    assert result.automatic_recovery_action == "wait_for_provider_check"
+    assert result.needs_attention is True
+    assert result.next_action is KeeperNextAction.ALLOW_CREDENTIAL_MINT
+    assert result.repair_hint is not None
+    assert "--allow-credential-mint" in result.repair_hint
+
+    monkeypatch.setattr("newsclip.cli.build_auth_service", _CliService)
+    monkeypatch.setattr(
+        "newsclip.cli.build_session_keeper", lambda *args, **kwargs: keeper
+    )
+    invocation = CliRunner().invoke(app, ["auth", "keep", "ft", "--json"])
+    assert invocation.exit_code == 1
+
+
+def test_defense_canary_maps_check_in_progress_to_busy(tmp_path):
+    from types import SimpleNamespace
+
+    from newsclip.provider_guard import GuardAction
+
+    class ContendedGuard(FakeGuard):
+        def run_incident_review_canary(self, provider, check):
+            return SimpleNamespace(action=GuardAction.CHECK_IN_PROGRESS)
+
+    sessions = FakeSessions(last_verified_at=NOW - timedelta(days=2))
+    sessions.defense_pending = lambda provider: True
+    keeper, _, _ = _keeper(tmp_path, sessions=sessions, guard=ContendedGuard())
+
+    result = keeper.keep("ft", allow_credential_mint=True)
+    assert result.action is KeeperAction.BUSY
+    assert result.reason_code == "check_in_progress"
+    assert result.needs_attention is False
+
+
+def test_post_renewal_defense_canary_failure_preserves_session_proof_and_revision(
+    tmp_path,
+):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from newsclip.provider_guard import GuardAction
+
+    class FailingCanaryGuard(FakeGuard):
+        def __init__(self) -> None:
+            super().__init__(
+                SimpleNamespace(action=GuardAction.SESSION_PROMOTION_REQUIRED)
+            )
+
+        def run_incident_review_canary(self, provider, check):
+            return SimpleNamespace(action=GuardAction.TRANSIENT_FAILURE)
+
+    sessions = FakeSessions(last_verified_at=NOW - timedelta(days=2))
+    sessions.defense_pending = lambda provider: True
+    sessions.session_recovery_scope = lambda provider: nullcontext()
+    outcomes = KeeperOutcomeStore(tmp_path / "session-keeper", utc_now=lambda: NOW)
+    keeper, _, _ = _keeper(
+        tmp_path,
+        sessions=sessions,
+        guard=FailingCanaryGuard(),
+        outcomes=outcomes,
+    )
+
+    result = keeper._keep("ft", allow_credential_mint=False)
+    assert result.action is KeeperAction.COOLDOWN
+    assert result.status is SessionStatus.VERIFIED
+    assert result.session_proof_verified is True
+    assert result.renewal_revision is not None

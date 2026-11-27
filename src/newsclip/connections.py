@@ -32,10 +32,10 @@ from .connections_ui import (
     describe_access,
     render_avatar,
     render_check_banner,
+    render_error_card,
     render_meta,
     render_overview,
     render_pill,
-    render_topbar,
 )
 from .connections_ui import (
     PUBLISHER_NAMES as _PUBLISHER_NAMES,
@@ -64,7 +64,7 @@ class _ReservedRelay(Relay):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._lock = threading.RLock()
-        self._reserved_slots = 0
+        self._held_slots = 0
 
     def reserve_slot(self, key: str) -> bool:
         now = self._clock()
@@ -75,31 +75,42 @@ class _ReservedRelay(Relay):
             if len(made) >= self.links_per_hour:
                 return False
             self._expire(now)
-            if len(self._retired) + self._reserved_slots >= self.max_links:
+            if len(self._retired) + self._held_slots >= self.max_links:
                 return False
-            self._reserved_slots += 1
+            self._held_slots += 1
             return True
 
     def release_slot(self) -> None:
         with self._lock:
-            if self._reserved_slots > 0:
-                self._reserved_slots -= 1
+            if self._held_slots > 0:
+                self._held_slots -= 1
 
     def create(
         self,
         key: str,
         *,
-        params: dict | None = None,
+        params: dict[str, Any] | None = None,
         label: str | None = None,
         context: AttemptContext | None = None,
+        reservation: Any = None,
         reserved: bool = False,
     ) -> Link:
+        if reservation is not None:
+            if reserved:
+                raise ValueError("pass either a reservation or a held slot, not both")
+            return super().create(
+                key,
+                params=params,
+                label=label,
+                context=context,
+                reservation=reservation,
+            )
         if self._authorize is not None and (context is None or not context.owner):
             raise ValueError("authenticated links require a host-assigned owner")
         to_retire: list[Link] = []
         with self._lock:
-            if reserved and self._reserved_slots > 0:
-                self._reserved_slots -= 1
+            if reserved and self._held_slots > 0:
+                self._held_slots -= 1
             now = self._clock()
             made = self._made.setdefault(key, collections.deque())
             while made and now - made[0] > 3600:
@@ -107,10 +118,7 @@ class _ReservedRelay(Relay):
             if len(made) >= self.links_per_hour:
                 raise LinkLimited(key)
             self._expire(now)
-            if (
-                not reserved
-                and len(self._retired) + self._reserved_slots >= self.max_links
-            ):
+            if not reserved and len(self._retired) + self._held_slots >= self.max_links:
                 raise LinkLimited(key)
             made.append(now)
             for old in [item for item in self._links.values() if item.key == key]:
@@ -1015,12 +1023,14 @@ class Connections:
             )
         return items
 
-    def page(self, body, *, refresh=False):
+    def page(self, body, *, refresh=False, intro="", suite=None):
         return connection_page(
             "News subscriptions",
             body,
+            intro=intro,
             refresh=refresh,
             login_url=self.home + "login",
+            suite=suite,
             **renderer_options(connection_page),
         )
 
@@ -1041,13 +1051,14 @@ class Connections:
             if action == "cancel"
             else "secondary"
             if action == "check" or text in ("Reconnect", "Start new sign-in")
-            else "primary"
+            else ""
         )
+        cls = f' class="{kind}"' if kind else ""
         form = (
             f'<form method="post" action="{self.home}{action}">'
             '<input type="hidden" name="provider" '
             f'value="{html.escape(provider)}">{fence}'
-            f'<button class="{kind}">{html.escape(text)}</button></form>'
+            f"<button{cls}>{html.escape(text)}</button></form>"
         )
         if action == "disconnect" and text.startswith("Disconnect"):
             return disconnect_confirmation(
@@ -1066,16 +1077,25 @@ class Connections:
             return RedirectResponse(self.home + "login", status_code=303)
         user = self.user(request)
         if user is None:
+            logout_action = html.escape(self.home + "logout", quote=True)
             return HTMLResponse(
                 self.page(
-                    "<p>This sign-in cannot manage a Newsclip subscription. "
-                    "Sign in with another account, "
-                    "or ask your administrator to check access.</p>"
-                    f'<form method=post action="{self.home}logout">'
-                    "<button class=quiet>Sign out of Connections</button></form>"
+                    render_error_card(
+                        "Access unavailable",
+                        "No access",
+                        "bad",
+                        "This sign-in cannot manage a Newsclip subscription. "
+                        "Sign in with another account, or ask your administrator "
+                        "to check access.",
+                        action_html=(
+                            f'<form method="post" action="{logout_action}">'
+                            '<button class="secondary">Sign out</button></form>'
+                        ),
+                    ),
                 ),
                 status_code=403,
             )
+        suite = self.auth.suite(request)
 
         def load_index():
             loaded_statuses = self.statuses(user, include_replace=True)
@@ -1199,19 +1219,28 @@ class Connections:
 
             effective_tones.append(card_tone)
             pulse = is_checking or state in ("connecting", "saving")
-            role = "alert" if state == "unavailable" or card_tone == "bad" else "status"
+            role_attr = (
+                ' role="alert"' if state == "unavailable" or card_tone == "bad" else ""
+            )
             subtitle = (
                 f'<p class="nc-pub-sub">{html.escape(source_label)}</p>'
                 if source_label and using_shared
                 else ""
             )
 
-            tone_attr = html.escape(card_tone, quote=True)
-            callout_attr = html.escape(callout_tone, quote=True)
+            if callout_tone in ("warn", "bad", "info"):
+                detail_html = (
+                    f'<div class="callout {html.escape(callout_tone, quote=True)}"'
+                    f"{role_attr}><p>{html.escape(card_detail)}</p></div>"
+                )
+            else:
+                detail_html = (
+                    f'<p class="muted"{role_attr}>{html.escape(card_detail)}</p>'
+                )
+
             card_parts = [
-                f'<article class="nc-card nc-tone-{tone_attr}" '
-                f'id="{html.escape(provider, quote=True)}">',
-                '<div class="nc-card-head">',
+                f'<article id="{html.escape(provider, quote=True)}">',
+                '<div class="card-head">',
                 '<div class="nc-pub">',
                 render_avatar(provider),
                 f'<div><h2 class="nc-pub-title">{html.escape(status["name"])}</h2>'
@@ -1219,8 +1248,7 @@ class Connections:
                 "</div>",
                 render_pill(card_label, card_tone, pulse=pulse),
                 "</div>",
-                f'<p class="nc-callout nc-callout--{callout_attr}" '
-                f'role="{role}">{html.escape(card_detail)}</p>',
+                detail_html,
                 render_check_banner(show_check_banner),
                 render_meta(
                     last_verified=status["last_verified"],
@@ -1306,7 +1334,7 @@ class Connections:
                     )
 
             if actions:
-                card_parts.append(f'<div class="nc-actions">{"".join(actions)}</div>')
+                card_parts.append(f'<div class="actions">{"".join(actions)}</div>')
 
             if self.access is not None:
                 if (
@@ -1316,9 +1344,11 @@ class Connections:
                 ):
                     card_parts.append(
                         '<div class="nc-sharing">'
-                        '<p role="alert">Sharing controls are unavailable. '
+                        '<div class="callout bad" role="alert"><p>'
+                        "Sharing controls are unavailable. "
                         "Ask the administrator to recover this record. "
-                        "Your own connection controls above remain available.</p>"
+                        "Your own connection controls above remain available."
+                        "</p></div>"
                         "</div>"
                     )
                 else:
@@ -1336,9 +1366,11 @@ class Connections:
                     except (NewsclipError, OSError, ValueError):
                         card_parts.append(
                             '<div class="nc-sharing">'
-                            '<p role="alert">Sharing controls are unavailable. '
+                            '<div class="callout bad" role="alert"><p>'
+                            "Sharing controls are unavailable. "
                             "Ask the administrator to recover this record. "
-                            "Your own connection controls above remain available.</p>"
+                            "Your own connection controls above remain available."
+                            "</p></div>"
                             "</div>"
                         )
 
@@ -1348,28 +1380,37 @@ class Connections:
             card_parts.append("</article>")
             cards.append("".join(card_parts))
 
+        logout_action = html.escape(self.home + "logout", quote=True)
         body = (
             f"<style>{CONNECTIONS_STYLE}</style>"
-            + render_topbar(identity["name"], self.home + "logout")
             + render_overview(
                 effective_tones,
                 check_all_action=self.home + "check-all" if any_checkable else None,
                 any_checking=any_checking,
             )
             + f'<div class="nc-cards">{"".join(cards)}</div>'
-            + '<p class="nc-footer-note">'
-            "Connecting a subscription does not give an assistant "
+            + '<div class="nc-footer-row">'
+            + "<p>Connecting a subscription does not give an assistant "
             "permission to use it. Access to each article is checked separately. "
             "Disconnecting keeps your saved articles.</p>"
+            + f'<form method="post" action="{logout_action}">'
+            + '<button class="quiet">Sign out</button></form>'
+            + "</div>"
         )
         return HTMLResponse(
             self.page(
                 body,
+                intro=(
+                    "Connect your news subscriptions and choose which account "
+                    "your assistant reads with."
+                    + ("" if suite else f" Signed in as {identity['name']}.")
+                ),
                 refresh=any_checking
                 or any(
                     item["state"] in ("connecting", "saving", "recovering")
                     for item in statuses
                 ),
+                suite=suite,
             ),
         )
 
@@ -1397,8 +1438,10 @@ class Connections:
             if selected
             else "No subscription selected. Choose below to continue."
         )
+        removed_shared = False
         if selected and selected["owner"] != user:
             if admitted_ok is False:
+                removed_shared = True
                 summary = (
                     "The selected shared access was removed or changed. Choose below."
                 )
@@ -1406,17 +1449,23 @@ class Connections:
                 try:
                     self.access.admit(user, provider)
                 except NewsclipError:
+                    removed_shared = True
                     summary = (
                         "The selected shared access was removed or changed. "
                         "Choose below."
                     )
 
+        summary_html = (
+            '<div class="callout warn" aria-live="polite">'
+            f"<p>{html.escape(summary)}</p></div>"
+            if removed_shared or not selected
+            else '<p class="nc-sharing-status" aria-live="polite">'
+            f"{html.escape(summary)}</p>"
+        )
         parts = [
             '<div class="nc-sharing">',
             '<section aria-label="Account selection">',
-            '<div class="nc-sharing-head">',
-            f'<p class="nc-sharing-summary" role="status">{html.escape(summary)}</p>',
-            "</div>",
+            summary_html,
         ]
         offer_rows: list[str] = []
         if not selected or selected["owner"] != user:
@@ -1435,13 +1484,15 @@ class Connections:
                 },
                 "Use my subscription",
             )
+            own_initial = html.escape(user[:1] or "M")
             offer_rows.append(
-                '<div class="nc-offer-row">'
-                '<div class="nc-offer-info">'
-                f'<p class="nc-offer-title">My subscription {own_pill}</p>'
-                "</div>"
+                "<li>"
+                '<div class="who"><span class="avatar" aria-hidden="true">'
+                f"{own_initial}</span>"
+                "<span><b>My subscription</b></span></div>"
+                f"{own_pill}"
                 f'<div class="nc-offer-actions">{choose_own}</div>'
-                "</div>"
+                "</li>"
             )
         for owner, grant in offered:
             owner_info = (
@@ -1478,25 +1529,27 @@ class Connections:
                     else "Decline access from " + owner,
                 )
             )
+            owner_initial = html.escape(owner[:1] or "?")
             offer_rows.append(
-                '<div class="nc-offer-row">'
-                '<div class="nc-offer-info">'
-                f'<p class="nc-offer-title">{html.escape(owner)}\'s subscription '
-                f"{owner_pill}</p>"
-                '<p class="nc-offer-detail">Read with their subscription; '
-                "save articles privately to your own archive.</p>"
-                "</div>"
+                "<li>"
+                '<div class="who"><span class="avatar" aria-hidden="true">'
+                f"{owner_initial}</span>"
+                f"<span><b>{html.escape(owner)}'s subscription</b>"
+                "<small>Read with their subscription; "
+                "save articles privately to your own archive.</small></span></div>"
+                f"{owner_pill}"
                 f'<div class="nc-offer-actions">{"".join(row_actions)}</div>'
-                "</div>"
+                "</li>"
             )
         if offer_rows:
-            parts.append(f'<div class="nc-offer-list">{"".join(offer_rows)}</div>')
+            parts.append(f'<ul class="rows">{"".join(offer_rows)}</ul>')
         parts.append("</section>")
 
         if unavailable:
             parts.append(
-                '<p role="alert">Some shared offers are unavailable. '
-                "Other controls remain usable.</p>"
+                '<div class="callout warn" role="alert"><p>'
+                "Some shared offers are unavailable. "
+                "Other controls remain usable.</p></div>"
             )
 
         active_grant_count = len(row["grants"])
@@ -1518,6 +1571,7 @@ class Connections:
         for member in sorted(members | row["grants"].keys()):
             grant = row["grants"].get(member)
             if grant:
+                member_badge = render_pill("Shared", "ok")
                 btn = action_form(
                     self.home + "unshare",
                     {"provider": provider, "member": member, "grant": grant},
@@ -1525,6 +1579,7 @@ class Connections:
                     danger=True,
                 )
             elif status["state"] == "connected":
+                member_badge = ""
                 btn = action_form(
                     self.home + "share",
                     {
@@ -1536,16 +1591,22 @@ class Connections:
                     "Share my subscription",
                 )
             else:
+                member_badge = ""
                 btn = '<span class="muted">Connect first to share</span>'
+            member_initial = html.escape(member[:1] or "?")
             member_rows.append(
-                '<div class="nc-member-row">'
-                f'<p class="nc-member-name">{html.escape(member)}</p>'
-                f"{btn}</div>"
+                "<li>"
+                '<div class="who"><span class="avatar" aria-hidden="true">'
+                f"{member_initial}</span>"
+                f"<span><b>{html.escape(member)}</b></span></div>"
+                f"{member_badge}{btn}</li>"
             )
         if member_rows:
-            parts.append(f'<div class="nc-members">{"".join(member_rows)}</div>')
+            parts.append(f'<ul class="rows">{"".join(member_rows)}</ul>')
         elif not members:
-            parts.append("<p>No other registered users are available.</p>")
+            parts.append(
+                '<p class="muted">No other registered users are available.</p>'
+            )
         parts.append("</details></div>")
         return "".join(parts)
 
@@ -1622,12 +1683,22 @@ class Connections:
         try:
             await self.adapters[user].dispatcher.run(apply)
         except (NewsclipError, OSError, ValueError):
+            back_href = html.escape(self.home, quote=True)
             return HTMLResponse(
                 self.page(
-                    '<p role="alert">Access changed or this action could not finish. '
-                    "Return to Connections to check the current selection "
-                    "and try again.</p>"
-                    f'<a href="{self.home}">Back to Connections</a>'
+                    render_error_card(
+                        "Selection changed",
+                        "Try again",
+                        "warn",
+                        "Access changed or this action could not finish. "
+                        "Return to Connections to check the current selection "
+                        "and try again.",
+                        action_html=(
+                            f'<a class="button" href="{back_href}">'
+                            "Back to Connections</a>"
+                        ),
+                    ),
+                    suite=self.auth.suite(request),
                 ),
                 status_code=409,
             )
@@ -1775,21 +1846,41 @@ class Connections:
 
                 await adapter.dispatcher.run(disconnect)
         except LinkLimited:
+            back_href = html.escape(self.home, quote=True)
             return HTMLResponse(
                 self.page(
-                    '<p role="alert">Too many sign-in attempts for this subscription. '
-                    "Wait a while and try again.</p>"
-                    f'<a href="{self.home}">Back to Connections</a>'
+                    render_error_card(
+                        "Too many sign-in attempts",
+                        "Paused",
+                        "warn",
+                        "Too many sign-in attempts for this subscription. "
+                        "Wait a while and try again.",
+                        action_html=(
+                            f'<a class="button" href="{back_href}">'
+                            "Back to Connections</a>"
+                        ),
+                    ),
+                    suite=self.auth.suite(request),
                 ),
                 status_code=429,
             )
         except (NewsclipError, OSError):
+            back_href = html.escape(self.home, quote=True)
             return HTMLResponse(
                 self.page(
-                    '<p role="alert">The operation could not finish. '
-                    "A pending disconnect stays blocked. "
-                    "Return to Connections and retry.</p>"
-                    f'<a href="{self.home}">Back to Connections</a>'
+                    render_error_card(
+                        "Could not finish",
+                        "Error",
+                        "bad",
+                        "The operation could not finish. "
+                        "A pending disconnect stays blocked. "
+                        "Return to Connections and retry.",
+                        action_html=(
+                            f'<a class="button" href="{back_href}">'
+                            "Back to Connections</a>"
+                        ),
+                    ),
+                    suite=self.auth.suite(request),
                 ),
                 status_code=409,
             )

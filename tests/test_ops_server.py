@@ -627,3 +627,39 @@ def test_fastmcp_client_raises_on_ops_failure_and_keeps_the_payload() -> None:
             }
 
     anyio.run(exercise)
+
+
+def test_heal_state_returns_current_result_before_callback_and_ignores_stale() -> None:
+    from concurrent.futures import Future
+
+    adapter = OpsAdapter(runner=RecordingRunner())
+
+    first_future: Future[CommandOutcome] = Future()
+    first_future.set_result(
+        CommandOutcome(exit_code=0, stdout=json.dumps({"action": "first"}))
+    )
+    adapter._heals["wsj"] = first_future  # noqa: SLF001
+    adapter._record_heal("wsj", first_future)  # noqa: SLF001
+    assert adapter.heal_state("wsj") == {
+        "status": "completed",
+        "result": {"action": "first", "exit_code": 0},
+    }
+
+    # Simulate a second heal finishing before its done callback has run:
+    # heal_state must return the second future's actual result, not the stale first one.
+    second_future: Future[CommandOutcome] = Future()
+    second_future.set_result(
+        CommandOutcome(exit_code=0, stdout=json.dumps({"action": "second"}))
+    )
+    adapter._heals["wsj"] = second_future  # noqa: SLF001
+    assert adapter.heal_state("wsj") == {
+        "status": "completed",
+        "result": {"action": "second", "exit_code": 0},
+    }
+
+    # A delayed callback from the stale first future must not clobber the second result.
+    adapter._record_heal("wsj", first_future)  # noqa: SLF001
+    assert adapter.heal_state("wsj") == {
+        "status": "completed",
+        "result": {"action": "second", "exit_code": 0},
+    }

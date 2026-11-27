@@ -2229,3 +2229,40 @@ def test_maintenance_cycle_cli_rejects_max_age_hours_above_720():
     assert result.exit_code == 2
     output = result.stderr or result.stdout
     assert "720" in output
+
+
+def test_cli_archive_restore_recovers_physically_corrupted_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_home = tmp_path / "data"
+    monkeypatch.setenv("NEWSCLIP_DATA_HOME", str(data_home))
+    archive_path = data_home / "archive.sqlite3"
+    store = ArchiveStore(archive_path)
+    backup = tmp_path / "backup" / "archive.sqlite3"
+    store.backup(backup)
+
+    # Corrupt the working archive with garbage bytes and stale sidecars.
+    archive_path.write_bytes(b"corrupted-archive-payload" * 32)
+    Path(f"{archive_path}-wal").write_bytes(b"corrupt-wal")
+    Path(f"{archive_path}-shm").write_bytes(b"corrupt-shm")
+
+    runner = CliRunner()
+    restored = runner.invoke(app, ["archive-restore", str(backup)])
+    assert restored.exit_code == 0, restored.output
+    assert f"Archive restored from {backup}" in restored.stdout
+    assert ArchiveStore(archive_path).integrity_check().ok is True
+
+    # Remote --server must still reject archive-restore with a usage error.
+    remote = runner.invoke(
+        app,
+        [
+            "--server",
+            "https://newsclip.example/users/alice",
+            "archive-restore",
+            str(backup),
+        ],
+        env={"NEWSCLIP_TOKEN": "fixture-token"},
+    )
+    assert remote.exit_code == 2
+    assert "error: invalid request" in (remote.stderr or remote.stdout)

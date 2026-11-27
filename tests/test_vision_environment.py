@@ -53,3 +53,105 @@ def test_claude_service_grant_is_isolated_from_codex_and_provider_secrets(monkey
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in vision_environment("codex")
     assert "OP_SERVICE_ACCOUNT_TOKEN" not in claude
     assert "EXAMPLE_MAIL_BEARER" not in claude
+
+
+def test_local_cli_vision_planner_fails_over_when_primary_binary_is_missing(
+    tmp_path, monkeypatch
+):
+    import json
+    import subprocess
+
+    from newsclip.vision_planning import LocalCliVisionPlanner
+
+    image = tmp_path / "challenge.png"
+    image.write_bytes(b"png")
+    invoked: list[list[str]] = []
+
+    def fake_which(name: str) -> str | None:
+        return "/usr/bin/claude" if name == "claude" else None
+
+    def fake_run(command, **_kwargs):
+        invoked.append(list(command))
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(
+                {
+                    "kind": "point",
+                    "points": [{"x": 0.5, "y": 0.5}],
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr("newsclip.vision_planning.shutil.which", fake_which)
+    monkeypatch.setattr(
+        "newsclip.vision_planning.vision_auth_available",
+        lambda provider: provider == "claude",
+    )
+    monkeypatch.setattr("newsclip.vision_planning.subprocess.run", fake_run)
+
+    plan = LocalCliVisionPlanner("codex").plan(
+        image, instruction="Select the target.", timeout_seconds=10.0
+    )
+    assert plan.kind.value == "point"
+    assert len(invoked) == 1
+    assert invoked[0][0] == "/usr/bin/claude"
+
+
+def test_local_cli_vision_planner_wraps_claude_command_value_error_and_fails_over(
+    tmp_path, monkeypatch
+):
+    import json
+    import subprocess
+
+    import pytest
+
+    from newsclip.vision_planning import LocalCliVisionPlanner, VisionPlanningError
+
+    image = tmp_path / "challenge.png"
+    image.write_bytes(b"png")
+    invoked: list[list[str]] = []
+
+    monkeypatch.setattr(
+        "newsclip.vision_planning.shutil.which",
+        lambda name: f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr(
+        "newsclip.vision_planning.vision_auth_available",
+        lambda provider: provider == "codex",
+    )
+
+    def fail_claude_command(*_args, **_kwargs):
+        raise ValueError("unsafe path")
+
+    def fake_run(command, **_kwargs):
+        invoked.append(list(command))
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(
+                {
+                    "kind": "point",
+                    "points": [{"x": 0.25, "y": 0.75}],
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(
+        "newsclip.vision_planning.claude_vision_command", fail_claude_command
+    )
+    monkeypatch.setattr("newsclip.vision_planning.subprocess.run", fake_run)
+
+    plan = LocalCliVisionPlanner("claude", failover=True).plan(
+        image, instruction="Select the target.", timeout_seconds=10.0
+    )
+    assert plan.kind.value == "point"
+    assert len(invoked) == 1
+    assert invoked[0][0] == "/usr/bin/codex"
+
+    with pytest.raises(VisionPlanningError, match="vision planner failed"):
+        LocalCliVisionPlanner("claude", failover=False).plan(
+            image, instruction="Select the target.", timeout_seconds=10.0
+        )

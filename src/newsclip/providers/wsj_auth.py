@@ -32,7 +32,7 @@ from ..browser_runtime import (
     ObservedNavigation,
     PasskeyMode,
 )
-from ..browser_verification import capture_verification_fetch
+from ..browser_verification import MainDocumentResponse, capture_verification_fetch
 from ..challenge_resolver import (
     ChallengeResolution,
     ChallengeResolutionStatus,
@@ -40,6 +40,7 @@ from ..challenge_resolver import (
 )
 from ..challenges import ChallengeInfrastructureError
 from ..contracts import AuthBrowserSession, LoginRecipe, SecretFiller
+from ..errors import ProviderTransportError
 from ..login import LoginInfrastructureError, credential_filler
 from ..models import FrozenModel, MintOutcome, RawFetch, SessionArtifact
 from ..provider_config import ProviderSpec, load_provider_spec, validate_auth_surface
@@ -472,29 +473,44 @@ class WSJAcquisitionAdapter:
         browser: AuthBrowserSession,
         challenge_mode: ChallengeMode,
     ) -> RawFetch:
-        observed = self._navigate_verification_context(browser)
-        deadline = time.monotonic() + 30
-        authenticated = False
-        reloaded = False
-        while time.monotonic() < deadline:
-            browser.wait(0.25)
-            resolution = self._resolve_challenge(browser, challenge_mode)
-            if resolution.status is ChallengeResolutionStatus.CLEARED:
-                observed = self._navigate_verification_context(browser)
-            observation = self._observe(browser, phase=AuthPhase.VERIFICATION)
-            self._terminal(observation)
-            if observation.authenticated:
-                authenticated = True
-                # A WSJ origin is necessary but not sufficient session proof.
-                # Require the same paid-article semantics used by retrieval so
-                # a partially completed Auth0 handoff cannot be exported.
-                browser.wait(1)
-                fetch = self._browser_article_fetch(browser, observed)
-                if self._recipe.verify_fetch(fetch).verified:
-                    return fetch
-                if not reloaded:
+        with MainDocumentResponse(browser.page) as document:
+            observed = self._navigate_verification_context(browser)
+            deadline = time.monotonic() + 30
+            authenticated = False
+            reloaded = False
+            while time.monotonic() < deadline:
+                browser.wait(0.25)
+                resolution = self._resolve_challenge(browser, challenge_mode)
+                if resolution.status is ChallengeResolutionStatus.CLEARED:
                     observed = self._navigate_verification_context(browser)
-                    reloaded = True
+                observation = self._observe(browser, phase=AuthPhase.VERIFICATION)
+                self._terminal(observation)
+                if observation.authenticated:
+                    authenticated = True
+                    # A WSJ origin is necessary but not sufficient session proof.
+                    # Require the same paid-article semantics used by retrieval so
+                    # a partially completed Auth0 handoff cannot be exported.
+                    browser.wait(1)
+                    try:
+                        response = document.select(None)
+                        current = (
+                            observed
+                            if response is None
+                            else ObservedNavigation(
+                                response.status,
+                                response.url,
+                                response.headers.get("content-type"),
+                            )
+                        )
+                        fetch = self._browser_article_fetch(browser, current)
+                        document.assert_current(response)
+                    except ProviderTransportError:
+                        continue
+                    if self._recipe.verify_fetch(fetch).verified:
+                        return fetch
+                    if not reloaded:
+                        observed = self._navigate_verification_context(browser)
+                        reloaded = True
         if authenticated:
             raise _failure(
                 MintOutcome.UNKNOWN_FLOW,

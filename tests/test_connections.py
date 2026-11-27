@@ -1152,3 +1152,72 @@ def test_controls_cancel_and_suspend_offloaded_to_dispatcher(accounts, tmp_path)
         )
 
         assert on_loop == [("cancel", False), ("cancel", False), ("suspend", False)]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["connection_disconnected", "connection_interactive"],
+)
+def test_disconnected_or_interactive_subscription_does_not_request_recovery(
+    tmp_path, reason: str
+) -> None:
+    from newsclip.models import (
+        AccessState,
+        ArticleAssessment,
+        ExtractedArticle,
+        ProviderCapabilities,
+        RateBudget,
+        RawFetch,
+    )
+    from newsclip.providers import ProviderRegistry
+    from newsclip.recovery import RecoveryStore
+    from newsclip.results import public_error
+    from newsclip.service import NewsclipService
+
+    class _SessionProvider:
+        key = "fixture"
+        capabilities = ProviderCapabilities(requires_session_for_retrieve=True)
+        login_recipe = None
+        assessment_policy_version = "fixture-v1"
+        extraction_scope = None
+
+        def owns_url(self, url: str) -> bool:
+            return url.startswith("https://fixture.test/")
+
+        def fetch(self, http, session, url: str) -> RawFetch:
+            raise AssertionError("fetch must not run without a valid session")
+
+        def assess(
+            self, requested_url: str, fetch: RawFetch, extraction: ExtractedArticle
+        ) -> ArticleAssessment:
+            return ArticleAssessment(
+                access_state=AccessState.FULL,
+                identity_match=True,
+                word_count=10,
+                reason="full_fixture",
+            )
+
+        def rate_budget(self) -> RateBudget:
+            return RateBudget(requests_per_second=100, burst=100)
+
+    class _BlockedSessionStore:
+        def get_valid_session(self, provider: str, account_key: str = "default"):
+            raise SessionRequiredError(reason)
+
+    recovery_store = RecoveryStore(tmp_path / "recovery")
+    service = NewsclipService(
+        ProviderRegistry((_SessionProvider(),)),
+        object(),
+        object(),
+        sessions=_BlockedSessionStore(),
+        recovery_store=recovery_store,
+    )
+
+    with pytest.raises(SessionRequiredError, match=reason) as caught:
+        service.get("https://fixture.test/article-1")
+
+    assert caught.value.recovery_id is None
+    envelope = public_error(caught.value).public_dict()
+    assert envelope.get("recovery_id") is None
+    assert envelope["action"] != "renewal_pending"
+    assert recovery_store.load("fixture") is None

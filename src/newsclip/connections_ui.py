@@ -1,8 +1,9 @@
-"""Best-in-class server-rendered UI components for Newsclip Connections.
+"""Server-rendered UI components for Newsclip Connections.
 
-Pure HTML and scoped CSS (no external assets, no custom JavaScript) so the page
-works inside signin-window's strict Content-Security-Policy and degrades cleanly
-without JavaScript. All dynamic text is escaped before rendering.
+Pure HTML and scoped CSS (no external assets, no custom JavaScript) built on
+signin-window's shared component kit and tokens so the page works inside
+signin-window's strict Content-Security-Policy and degrades cleanly without
+JavaScript. All dynamic text is escaped before rendering.
 """
 
 from __future__ import annotations
@@ -10,6 +11,8 @@ from __future__ import annotations
 import html
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+
+from signin_window.connections import badge as kit_badge
 
 from .models import (
     RecoveryStatus,
@@ -74,113 +77,19 @@ _FAILURE_EXPLANATIONS: dict[TerminalFailure, str] = {
 }
 
 CONNECTIONS_STYLE = """
-:root{
-  --bg:#f3f5f9;--surface:#ffffff;--surface-2:#f7f9fc;--text:#111c2d;--muted:#526175;
-  --line:#dce3ee;--line-strong:#c4cfdf;--accent:#1d4ed8;--accent-hover:#1e40af;--on-accent:#ffffff;
-  --danger:#b4232c;--danger-hover:#911b22;
-  --ok:#117a43;--ok-bg:#eaf7ef;--ok-border:#b7e4c7;
-  --warn:#9a5b00;--warn-bg:#fff6e5;--warn-border:#f3d28f;
-  --bad:#b4232c;--bad-bg:#fdecec;--bad-border:#f5b8bc;
-  --info:#1d4ed8;--info-bg:#ebf2ff;--info-border:#bfd5ff;
-  --neutral-bg:#eef2f7;--neutral-border:#d5dde8;
-  --shadow:0 1px 2px rgba(15,23,42,.04),0 6px 20px rgba(15,23,42,.05);
-  --radius:1rem;--radius-sm:.65rem;
-}
-@media(prefers-color-scheme:dark){
-  :root{
-    --bg:#0d141f;--surface:#151f2e;--surface-2:#1b273a;--text:#edf2fa;--muted:#9fb0c7;
-    --line:#2a3a52;--line-strong:#3b4f6e;--accent:#6ea8fe;--accent-hover:#8bb9fe;--on-accent:#0b1729;
-    --danger:#e0525e;--danger-hover:#eb6b76;
-    --ok:#4ade80;--ok-bg:rgba(34,197,94,.13);--ok-border:rgba(74,222,128,.32);
-    --warn:#fbbf24;--warn-bg:rgba(245,158,11,.14);--warn-border:rgba(251,191,36,.34);
-    --bad:#f87171;--bad-bg:rgba(239,68,68,.15);--bad-border:rgba(248,113,113,.35);
-    --info:#7cb3ff;--info-bg:rgba(59,130,246,.16);--info-border:rgba(124,179,255,.35);
-    --neutral-bg:rgba(148,163,184,.12);--neutral-border:rgba(148,163,184,.26);
-    --shadow:0 1px 2px rgba(0,0,0,.28),0 10px 26px rgba(0,0,0,.28);
-  }
-}
-main{max-width:54rem;margin:2rem auto;padding:1.25rem 1.5rem 3rem}
-h1{font-size:clamp(1.65rem,4vw,2.1rem);letter-spacing:-.035em;margin:0 0 .35rem}
-.eyebrow{letter-spacing:.1em;font-size:.74rem;color:var(--accent)}
-
-/* Top account bar */
-.nc-topbar{
-  display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;
-  margin:0 0 1.25rem;padding-bottom:1rem;border-bottom:1px solid var(--line);
-}
-.nc-user-chip{
-  display:inline-flex;align-items:center;gap:.5rem;margin:0;
-  font-size:.92rem;color:var(--muted);
-}
-.nc-user-dot{
-  width:.55rem;height:.55rem;border-radius:999px;background:var(--ok);flex:none;
-}
-.nc-topbar form{margin:0}
-.nc-topbar button.quiet{
-  min-height:36px;padding:.35rem .75rem;font-size:.88rem;border:1px solid var(--line);
-  border-radius:.5rem;color:var(--muted);background:var(--surface);
-}
-.nc-topbar button.quiet:hover{border-color:var(--line-strong);color:var(--text)}
-
-/* Health overview strip */
-.nc-overview{
-  display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;
-  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
-  padding:1rem 1.25rem;margin:0 0 1.35rem;box-shadow:var(--shadow);
-}
-.nc-stats{display:flex;align-items:center;gap:.65rem;flex-wrap:wrap}
-.nc-stat{
-  display:inline-flex;align-items:center;gap:.45rem;padding:.38rem .75rem;
-  border-radius:999px;font-size:.86rem;font-weight:600;
-  border:1px solid var(--neutral-border);background:var(--neutral-bg);
-  color:var(--text);font-variant-numeric:tabular-nums;
-}
-.nc-stat--ok{background:var(--ok-bg);border-color:var(--ok-border);color:var(--ok)}
-.nc-stat--warn{
-  background:var(--warn-bg);border-color:var(--warn-border);color:var(--warn);
-}
-.nc-stat--bad{background:var(--bad-bg);border-color:var(--bad-border);color:var(--bad)}
-.nc-stat--info{
-  background:var(--info-bg);border-color:var(--info-border);color:var(--info);
-}
-.nc-stat-dot{
-  width:.5rem;height:.5rem;border-radius:999px;background:currentColor;flex:none;
-}
-.nc-overview-actions{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
-.nc-overview-actions form{margin:0}
-.nc-overview-actions button{
-  min-height:38px;padding:.45rem .9rem;font-size:.88rem;font-weight:600;
-}
-
-/* Publisher cards */
-.nc-cards{display:grid;gap:1rem}
-article.nc-card{
-  position:relative;background:var(--surface);border:1px solid var(--line);
-  border-radius:var(--radius);padding:1.35rem 1.4rem 1.25rem;margin:0;
-  box-shadow:var(--shadow);overflow:hidden;
-}
-article.nc-card::before{
-  content:"";position:absolute;inset:0 auto 0 0;width:4px;
-  background:var(--neutral-border);
-}
-article.nc-card.nc-tone-ok::before{background:var(--ok)}
-article.nc-card.nc-tone-warn::before{background:var(--warn)}
-article.nc-card.nc-tone-bad::before{background:var(--bad)}
-article.nc-card.nc-tone-info::before{background:var(--info)}
-
-.nc-card-head{
-  display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;flex-wrap:wrap;
-  margin-bottom:.85rem;
-}
-.nc-pub{display:flex;align-items:center;gap:.8rem;min-width:0}
+.nc-hero-headline{font-size:1.15rem;font-weight:650;margin:.15rem 0 .25rem}
+.nc-cards{display:grid;gap:1rem;margin:1rem 0}
+.nc-cards>article{margin:0}
+.nc-pub{display:flex;align-items:center;gap:.75rem;min-width:0}
 .nc-avatar{
-  width:2.55rem;height:2.55rem;border-radius:.7rem;flex:none;
-  display:grid;place-items:center;font-weight:800;font-size:.78rem;letter-spacing:.03em;
-  background:var(--neutral-bg);color:var(--text);border:1px solid var(--neutral-border);
+  width:2.4rem;height:2.4rem;border-radius:var(--radius-sm);flex:none;
+  display:grid;place-content:center;font-weight:750;font-size:.76rem;
+  letter-spacing:.03em;background:var(--neutral-bg);color:var(--text);
+  border:1px solid var(--neutral-border);
 }
 .nc-avatar--ft{background:#fce7d8;color:#7c2d12;border-color:#f3c4a4}
 .nc-avatar--economist{background:#fee2e2;color:#991b1b;border-color:#fca5a5}
-.nc-avatar--wsj{background:#e2e8f0;color:#0f172a;border-color:#cbd5e1}
+.nc-avatar--wsj{background:#e7e5e4;color:#1c1917;border-color:#d6d3d1}
 .nc-avatar--nyt{background:#ede9fe;color:#3b0764;border-color:#d8b4fe}
 .nc-avatar--bloomberg{background:#dbeafe;color:#1e3a8a;border-color:#93c5fd}
 .nc-avatar--reuters{background:#ffedd5;color:#9a3412;border-color:#fdba74}
@@ -193,7 +102,7 @@ article.nc-card.nc-tone-info::before{background:var(--info)}
     background:rgba(239,68,68,.18);color:#fca5a5;border-color:rgba(239,68,68,.38);
   }
   .nc-avatar--wsj{
-    background:rgba(148,163,184,.18);color:#e2e8f0;border-color:rgba(148,163,184,.34);
+    background:rgba(168,162,158,.18);color:#e7e5e4;border-color:rgba(168,162,158,.34);
   }
   .nc-avatar--nyt{
     background:rgba(168,85,247,.18);color:#e9d5ff;border-color:rgba(168,85,247,.36);
@@ -208,162 +117,40 @@ article.nc-card.nc-tone-info::before{background:var(--info)}
     background:rgba(34,197,94,.18);color:#bbf7d0;border-color:rgba(34,197,94,.36);
   }
 }
-.nc-pub-title{margin:0;font-size:1.15rem;line-height:1.25;letter-spacing:-.015em}
-.nc-pub-sub{margin:.15rem 0 0;font-size:.82rem;color:var(--muted)}
-
-/* Status pill */
-.nc-pill{
-  display:inline-flex;align-items:center;gap:.45rem;padding:.3rem .72rem;
-  border-radius:999px;font-size:.82rem;font-weight:700;line-height:1.2;
-  border:1px solid var(--neutral-border);background:var(--neutral-bg);
-  color:var(--muted);white-space:nowrap;
-}
-.nc-pill--ok{background:var(--ok-bg);border-color:var(--ok-border);color:var(--ok)}
-.nc-pill--warn{
-  background:var(--warn-bg);border-color:var(--warn-border);color:var(--warn);
-}
-.nc-pill--bad{background:var(--bad-bg);border-color:var(--bad-border);color:var(--bad)}
-.nc-pill--info{
-  background:var(--info-bg);border-color:var(--info-border);color:var(--info);
-}
-.nc-pill--muted{
-  background:var(--neutral-bg);border-color:var(--neutral-border);color:var(--muted);
-}
-.nc-pill-dot{
-  width:.5rem;height:.5rem;border-radius:999px;background:currentColor;flex:none;
-}
-.nc-pill--pulse .nc-pill-dot{animation:nc-pulse 1.4s ease-in-out infinite}
+.nc-pub-title{margin:0;font-size:1.1rem;line-height:1.25;letter-spacing:-.01em}
+.nc-pub-sub{margin:.15rem 0 0;font-size:.84rem;color:var(--muted)}
+.badge.nc-pulse::before{animation:nc-pulse 1.4s ease-in-out infinite}
 @keyframes nc-pulse{
   0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.82)}
 }
-@media(prefers-reduced-motion:reduce){.nc-pill--pulse .nc-pill-dot{animation:none}}
-
-/* Callout & check banner */
-.nc-callout{
-  margin:.25rem 0 .75rem;padding:.65rem .85rem;border-radius:var(--radius-sm);
-  font-size:.93rem;font-weight:500;line-height:1.45;
-  background:var(--neutral-bg);border:1px solid var(--neutral-border);color:var(--text);
-}
-.nc-callout--ok{background:var(--ok-bg);border-color:var(--ok-border)}
-.nc-callout--warn{background:var(--warn-bg);border-color:var(--warn-border)}
-.nc-callout--bad{background:var(--bad-bg);border-color:var(--bad-border)}
-.nc-callout--info{background:var(--info-bg);border-color:var(--info-border)}
-
-.nc-check-result{
-  margin:0 0 .75rem;padding:.55rem .8rem;border-radius:var(--radius-sm);
-  font-size:.86rem;line-height:1.4;border:1px solid var(--line);
-  background:var(--surface-2);color:var(--text);
-}
-.nc-check-result--passed{
-  background:var(--ok-bg);border-color:var(--ok-border);color:var(--ok);
-}
-.nc-check-result--failed{
-  background:var(--bad-bg);border-color:var(--bad-border);color:var(--bad);
-}
-.nc-check-result--inconclusive{
-  background:var(--warn-bg);border-color:var(--warn-border);color:var(--warn);
-}
-.nc-check-result--checking{
-  background:var(--info-bg);border-color:var(--info-border);color:var(--info);
-}
-
-/* Metadata strip */
-.nc-meta{
-  display:flex;align-items:center;gap:.5rem 1.15rem;flex-wrap:wrap;
-  margin:0 0 .9rem;font-size:.83rem;color:var(--muted);
-  font-variant-numeric:tabular-nums;
-}
-.nc-meta-item{display:inline-flex;align-items:center;gap:.35rem}
-.nc-meta-sep{opacity:.4}
-
-/* Action bar */
-.nc-actions{
-  display:flex;align-items:center;gap:.55rem;flex-wrap:wrap;margin:.2rem 0 0;
-}
-.nc-actions form{margin:0}
-.nc-actions button,.nc-actions .button{
-  min-height:40px;padding:.5rem .95rem;font-size:.9rem;font-weight:600;
-  border-radius:.55rem;transition:background-color .12s ease,border-color .12s ease;
-}
-.nc-actions button.primary,.nc-actions .button{
-  background:var(--accent);border-color:var(--accent);color:var(--on-accent);
-}
-.nc-actions button.primary:hover,.nc-actions .button:hover{
-  background:var(--accent-hover);border-color:var(--accent-hover);
-}
-.nc-actions button.secondary{
-  background:var(--surface);border-color:var(--line-strong);color:var(--text);
-}
-.nc-actions button.secondary:hover{
-  background:var(--surface-2);border-color:var(--accent);color:var(--accent);
-}
-.nc-actions button.quiet{color:var(--muted);border-color:transparent}
-.nc-actions button.quiet:hover{color:var(--text);background:var(--surface-2)}
-
-/* Sharing & account selection */
-.nc-sharing{
-  margin-top:1rem;padding-top:.9rem;border-top:1px solid var(--line);
-}
-.nc-sharing-head{
-  display:flex;align-items:center;justify-content:space-between;gap:.6rem;flex-wrap:wrap;
-  margin:0 0 .55rem;
-}
-.nc-sharing-summary{
-  margin:0;padding:.35rem .65rem;border-radius:.5rem;font-size:.86rem;font-weight:600;
-  background:var(--surface-2);border:1px solid var(--line);color:var(--text);
-}
-.nc-offer-list{display:grid;gap:.55rem;margin:.6rem 0}
-.nc-offer-row{
-  display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;
-  padding:.65rem .8rem;border-radius:var(--radius-sm);
-  background:var(--surface-2);border:1px solid var(--line);
-}
-.nc-offer-info{min-width:0;flex:1 1 14rem}
-.nc-offer-title{
-  margin:0;font-size:.9rem;font-weight:600;display:flex;align-items:center;
-  gap:.45rem;flex-wrap:wrap;
-}
-.nc-offer-detail{margin:.2rem 0 0;font-size:.82rem;color:var(--muted)}
-.nc-offer-actions{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap}
+@media(prefers-reduced-motion:reduce){.badge.nc-pulse::before{animation:none}}
+.nc-sharing{margin-top:1rem;padding-top:.9rem;border-top:1px solid var(--line)}
+.nc-sharing-status{margin:0 0 .35rem;font-size:.9rem;font-weight:600;color:var(--text)}
+.nc-offer-actions{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
 .nc-offer-actions form{margin:0}
-.nc-offer-actions button{
-  min-height:36px;padding:.35rem .75rem;font-size:.84rem;font-weight:600;
+.nc-footer-row{
+  display:flex;align-items:center;justify-content:space-between;
+  gap:.75rem 1.25rem;flex-wrap:wrap;margin-top:1.5rem;
 }
-
-.nc-members{display:grid;gap:.45rem;margin:.65rem 0 0}
-.nc-member-row{
-  display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;
-  padding:.55rem .75rem;border-radius:.55rem;background:var(--surface-2);
-  border:1px solid var(--line);
+.nc-footer-row p{
+  margin:0;font-size:.84rem;color:var(--muted);line-height:1.5;flex:1 1 20rem;
 }
-.nc-member-name{margin:0;font-size:.9rem;font-weight:600}
-.nc-member-row form{margin:0}
-.nc-member-row button{
-  min-height:36px;padding:.35rem .75rem;font-size:.84rem;font-weight:600;
-}
-
-/* Disclosures */
-article.nc-card details{
-  margin-top:.85rem;padding-top:.2rem;border-top:1px solid var(--line);
-}
-article.nc-card details>summary{font-size:.88rem;min-height:38px;padding:.45rem 0}
-article.nc-card details.manage{margin-top:.75rem}
-article.nc-card details.manage p{font-size:.86rem;margin:.25rem 0 .65rem}
-
-.nc-footer-note{
-  margin:1.5rem 0 0;font-size:.84rem;color:var(--muted);line-height:1.5;
-}
-
-@media(max-width:540px){
-  main{margin:.75rem auto;padding:.9rem 1rem 2rem}
-  article.nc-card{padding:1.1rem 1.05rem}
-  .nc-overview{padding:.9rem 1rem}
-  .nc-actions{display:grid;grid-template-columns:1fr}
-  .nc-actions button,.nc-actions .button{width:100%;text-align:center}
-  .nc-offer-row,.nc-member-row{flex-direction:column;align-items:stretch}
-  .nc-offer-actions button,.nc-member-row button{width:100%}
+.nc-footer-row form{margin:0}
+@media(max-width:560px){
+  .nc-offer-actions,.rows form{width:100%}
+  .nc-offer-actions{display:grid}
+  .nc-footer-row form{width:100%}
 }
 """
+
+_TONE_MAP: dict[str, str] = {
+    "ok": "ok",
+    "warn": "warn",
+    "bad": "bad",
+    "info": "info",
+    "neutral": "neutral",
+    "muted": "neutral",
+}
 
 
 def publisher_name(provider: str) -> str:
@@ -531,25 +318,11 @@ def describe_access(
 
 
 def render_pill(label: str, tone: str, *, pulse: bool = False) -> str:
-    extra = " nc-pill--pulse" if pulse else ""
-    return (
-        f'<span class="nc-pill nc-pill--{html.escape(tone, quote=True)}{extra}">'
-        f'<span class="nc-pill-dot" aria-hidden="true"></span>'
-        f"{html.escape(label)}</span>"
-    )
-
-
-def render_topbar(display_name: str, logout_action: str) -> str:
-    return (
-        '<div class="nc-topbar">'
-        '<p class="nc-user-chip">'
-        '<span class="nc-user-dot" aria-hidden="true"></span>'
-        f"<span>Signed in as <strong>{html.escape(display_name)}</strong></span>"
-        "</p>"
-        f'<form method="post" action="{html.escape(logout_action, quote=True)}">'
-        '<button class="quiet">Sign out of Connections</button></form>'
-        "</div>"
-    )
+    kit_tone = _TONE_MAP.get(tone, "neutral")
+    rendered = kit_badge(label, kit_tone)
+    if pulse:
+        return rendered.replace('class="badge', 'class="badge nc-pulse', 1)
+    return rendered
 
 
 def render_overview(
@@ -558,59 +331,89 @@ def render_overview(
     check_all_action: str | None,
     any_checking: bool,
 ) -> str:
+    total = len(effective_tones)
     working = sum(1 for tone in effective_tones if tone == "ok")
-    attention = sum(1 for tone in effective_tones if tone in ("warn", "bad"))
+    bad = sum(1 for tone in effective_tones if tone == "bad")
+    warn = sum(1 for tone in effective_tones if tone == "warn")
     in_progress = sum(1 for tone in effective_tones if tone == "info")
-    not_connected = sum(1 for tone in effective_tones if tone == "muted")
+    not_connected = sum(1 for tone in effective_tones if tone in ("muted", "neutral"))
 
-    stats: list[str] = []
+    breakdown: list[str] = []
     if working:
-        stats.append(
-            '<span class="nc-stat nc-stat--ok">'
-            '<span class="nc-stat-dot" aria-hidden="true"></span>'
-            f"{working} Working</span>"
-        )
-    if attention:
-        cls = "nc-stat--bad" if "bad" in effective_tones else "nc-stat--warn"
-        stats.append(
-            f'<span class="nc-stat {cls}">'
-            '<span class="nc-stat-dot" aria-hidden="true"></span>'
-            f"{attention} Needs attention</span>"
-        )
+        breakdown.append(f"{working} working")
+    if bad:
+        breakdown.append(f"{bad} action needed")
+    if warn:
+        breakdown.append(f"{warn} needs check")
     if in_progress:
-        stats.append(
-            '<span class="nc-stat nc-stat--info">'
-            '<span class="nc-stat-dot" aria-hidden="true"></span>'
-            f"{in_progress} In progress</span>"
-        )
+        breakdown.append(f"{in_progress} in progress")
     if not_connected:
-        stats.append(
-            '<span class="nc-stat">'
-            '<span class="nc-stat-dot" aria-hidden="true"></span>'
-            f"{not_connected} Not connected</span>"
-        )
-    if not stats:
-        stats.append('<span class="nc-stat">No subscriptions configured</span>')
+        breakdown.append(f"{not_connected} not connected")
 
-    right = ""
+    pulse = False
     if any_checking:
-        right = (
-            '<div class="nc-overview-actions">'
-            + render_pill("Checking access…", "info", pulse=True)
-            + "</div>"
+        badge_label, badge_tone, pulse = "Checking…", "info", True
+        headline = "Checking your subscriptions…"
+        subline = "Live checks are running against your connected publishers."
+    elif total == 0:
+        badge_label, badge_tone = "Not connected", "neutral"
+        headline = "No subscriptions configured"
+        subline = "Ask your administrator to enable a publisher."
+    elif bad:
+        badge_label, badge_tone = "Action needed", "bad"
+        noun = "subscription needs" if bad == 1 else "subscriptions need"
+        headline = f"{bad} {noun} attention"
+        subline = " · ".join(breakdown)
+    elif warn:
+        badge_label, badge_tone = "Needs check", "warn"
+        noun = "subscription needs" if warn == 1 else "subscriptions need"
+        headline = f"{warn} {noun} a check"
+        subline = " · ".join(breakdown)
+    elif in_progress:
+        badge_label, badge_tone, pulse = "Sign-in open", "info", True
+        headline = "Sign-in in progress"
+        subline = " · ".join(breakdown)
+    elif working == total:
+        badge_label, badge_tone = "Connected", "ok"
+        headline = (
+            "1 subscription working"
+            if total == 1
+            else f"All {total} subscriptions working"
+        )
+        subline = "Your assistant can read from your connected publishers."
+    elif working:
+        badge_label, badge_tone = "Connected", "ok"
+        headline = f"{working} of {total} subscriptions working"
+        subline = " · ".join(breakdown)
+    else:
+        badge_label, badge_tone = "Sign-in needed", "neutral"
+        headline = "No subscriptions connected yet"
+        subline = "Connect a publisher below to get started."
+
+    actions = ""
+    if any_checking:
+        actions = (
+            '<div class="actions">'
+            '<button type="button" class="secondary" disabled>Checking…</button>'
+            "</div>"
         )
     elif check_all_action:
-        right = (
-            '<div class="nc-overview-actions">'
+        actions = (
+            '<div class="actions">'
             f'<form method="post" action="{html.escape(check_all_action, quote=True)}">'
-            '<button class="secondary">Check all</button></form>'
+            "<button>Check all</button></form>"
             "</div>"
         )
 
     return (
-        '<section class="nc-overview" aria-label="Access summary">'
-        f'<div class="nc-stats">{"".join(stats)}</div>'
-        f"{right}</section>"
+        '<section class="panel hero" aria-label="Access summary">'
+        '<div class="card-head">'
+        "<h2>Your subscriptions</h2>"
+        f"{render_pill(badge_label, badge_tone, pulse=pulse)}"
+        "</div>"
+        f'<p class="nc-hero-headline">{html.escape(headline)}</p>'
+        f'<p class="muted">{html.escape(subline)}</p>'
+        f"{actions}</section>"
     )
 
 
@@ -629,30 +432,33 @@ def render_meta(
     verified_age_seconds: float | None,
     source_label: str | None = None,
 ) -> str:
-    items: list[str] = []
+    rows: list[str] = []
     formatted = format_utc_time(last_verified)
     if formatted is not None:
         iso, utc_text = formatted
         rel = format_relative_age(verified_age_seconds)
         if rel:
-            items.append(
-                f'<span class="nc-meta-item">Last verified: '
+            rows.append(
+                "<dt>Last verified</dt><dd>"
                 f'<time datetime="{html.escape(iso, quote=True)}" '
                 f'title="{html.escape(utc_text, quote=True)}">'
-                f"{html.escape(rel)} ({html.escape(utc_text)})</time></span>"
+                f"{html.escape(rel)} ({html.escape(utc_text)})</time></dd>"
             )
         else:
-            items.append(
-                f'<span class="nc-meta-item">Last verified: '
+            rows.append(
+                "<dt>Last verified</dt><dd>"
                 f'<time datetime="{html.escape(iso, quote=True)}">'
-                f"{html.escape(utc_text)}</time></span>"
+                f"{html.escape(utc_text)}</time></dd>"
             )
     if source_label:
-        items.append(f'<span class="nc-meta-item">{html.escape(source_label)}</span>')
-    if not items:
+        if ": " in source_label:
+            label, value = source_label.split(": ", 1)
+        else:
+            label, value = "Active source", source_label
+        rows.append(f"<dt>{html.escape(label)}</dt><dd>{html.escape(value)}</dd>")
+    if not rows:
         return ""
-    sep = '<span class="nc-meta-sep" aria-hidden="true">·</span>'
-    return f'<div class="nc-meta">{sep.join(items)}</div>'
+    return f'<dl class="facts">{"".join(rows)}</dl>'
 
 
 def render_check_banner(check: Mapping[str, object] | None) -> str:
@@ -670,9 +476,34 @@ def render_check_banner(check: Mapping[str, object] | None) -> str:
         if checked_at
         else ""
     )
-    role = "alert" if check_state == "failed" else "status"
-    state_cls = html.escape(check_state, quote=True)
+    tone_by_state = {
+        "passed": "ok",
+        "failed": "bad",
+        "inconclusive": "warn",
+    }
+    callout_tone = tone_by_state.get(check_state, "")
+    cls = f"callout {callout_tone}" if callout_tone else "callout"
+    role_attr = ' role="alert"' if check_state == "failed" else ""
     return (
-        f'<p class="nc-check-result nc-check-result--{state_cls}" '
-        f'role="{role}">{html.escape(detail)}{time_html}</p>'
+        f'<div class="{cls}"{role_attr}><p>{html.escape(detail)}{time_html}</p></div>'
+    )
+
+
+def render_error_card(
+    heading: str,
+    badge_label: str,
+    badge_tone: str,
+    message: str,
+    *,
+    action_html: str = "",
+) -> str:
+    kit_tone = _TONE_MAP.get(badge_tone, "neutral")
+    callout_cls = f"callout {kit_tone}" if kit_tone != "neutral" else "callout"
+    actions = f'<div class="actions">{action_html}</div>' if action_html else ""
+    return (
+        "<article>"
+        f'<div class="card-head"><h2>{html.escape(heading)}</h2>'
+        f"{render_pill(badge_label, kit_tone)}</div>"
+        f'<div class="{callout_cls}" role="alert"><p>{html.escape(message)}</p></div>'
+        f"{actions}</article>"
     )

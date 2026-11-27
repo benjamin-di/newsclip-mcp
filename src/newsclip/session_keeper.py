@@ -241,14 +241,23 @@ class KeeperResult(FrozenModel):
     def needs_attention(self) -> bool:
         """Whether this outcome requires a person, rather than more waiting."""
 
-        if self.renewal_unresolved or self.automatic_recovery_stalled:
+        if (
+            self.renewal_unresolved
+            or self.automatic_recovery_stalled
+            or (
+                self.action in _ATTENTION_ACTIONS
+                and self.action is not KeeperAction.CHECK_FAILED
+            )
+        ):
             return True
         if self.automatic_recovery_action in {
             "retry_article",
             "wait_for_provider_check",
         }:
             return False
-        return self.action in _ATTENTION_ACTIONS or (
+        if self.action in _ATTENTION_ACTIONS:
+            return True
+        return (
             self.recovery is not None and self.recovery.status is RecoveryStatus.FAILED
         )
 
@@ -260,6 +269,31 @@ class KeeperResult(FrozenModel):
             return KeeperOverallState.HEALTHY
         return KeeperOverallState.WAITING
 
+    def _action_next_action(self) -> KeeperNextAction:
+        if self.reason_code in {
+            _VERIFICATION_UNRESOLVED,
+            "session_promotion_required",
+            _PAID_PROBE_INCONCLUSIVE,
+        }:
+            return KeeperNextAction.PROVIDER_CHECK_THEN_HEAL
+        if self.reason_code == _CREDENTIAL_MINT_NOT_PERMITTED:
+            return KeeperNextAction.ALLOW_CREDENTIAL_MINT
+        if self.reason_code == _CREDENTIAL_HOST_NOT_READY:
+            return KeeperNextAction.REPAIR_KEEPER_READINESS
+        if self.action is KeeperAction.HELD:
+            return KeeperNextAction.ACKNOWLEDGE_HOLD
+        if self.action is KeeperAction.OPERATOR_ACTION_REQUIRED:
+            return KeeperNextAction.REVIEW_ACCOUNT
+        if self.action is KeeperAction.CHECK_FAILED:
+            return KeeperNextAction.REVIEW_PROVIDER
+        if self.reason_code == "provider_defense":
+            # A challenged renewal plus browser-recovered HTTP reads indicates that
+            # the HTTP fingerprint may need repair rather than account replacement.
+            if self.http_challenges_24h:
+                return KeeperNextAction.UPDATE_HTTP_FINGERPRINT
+            return KeeperNextAction.REVIEW_PROVIDER
+        return KeeperNextAction.HEAL
+
     @property
     def next_action(self) -> KeeperNextAction | None:
         if self.automatic_recovery_stalled:
@@ -268,6 +302,11 @@ class KeeperResult(FrozenModel):
             "retry_article",
             "wait_for_provider_check",
         }:
+            if (
+                self.action in _ATTENTION_ACTIONS
+                and self.action is not KeeperAction.CHECK_FAILED
+            ):
+                return self._action_next_action()
             return KeeperNextAction.WAIT_FOR_RECOVERY
         if (
             self.recovery is not None
@@ -297,29 +336,60 @@ class KeeperResult(FrozenModel):
             if self.recovery_blocker == "ready":
                 return KeeperNextAction.HEAL
             return KeeperNextAction.PROVIDER_CHECK_THEN_HEAL
+        return self._action_next_action()
+
+    def _action_repair_hint(self) -> str:
+        provider = self.provider
         if self.reason_code in {
             _VERIFICATION_UNRESOLVED,
-            "session_promotion_required",
+            "session_promotion_required",  # previously persisted outcomes
             _PAID_PROBE_INCONCLUSIVE,
         }:
-            return KeeperNextAction.PROVIDER_CHECK_THEN_HEAL
+            # Verify before promoting: an unreadable probe does not establish
+            # failed entitlement. A FULL guarded canary requires both complete
+            # content and an identity match before a bounded renewal may clear
+            # the latch.
+            return (
+                f"review the retained probe and run ops provider_check("
+                f"provider={provider!r}); if healthy, run ops heal("
+                f"provider={provider!r}, allow_credential_mint=False). A failed "
+                "check alone does not establish an account problem"
+            )
         if self.reason_code == _CREDENTIAL_MINT_NOT_PERMITTED:
-            return KeeperNextAction.ALLOW_CREDENTIAL_MINT
+            return (
+                f"permit one bounded credential submission: newsclip auth keep "
+                f"{provider} --allow-credential-mint"
+            )
         if self.reason_code == _CREDENTIAL_HOST_NOT_READY:
-            return KeeperNextAction.REPAIR_KEEPER_READINESS
+            return (
+                f"this host cannot complete {provider}'s login; check "
+                f"`newsclip health` for the missing requirement"
+            )
         if self.action is KeeperAction.HELD:
-            return KeeperNextAction.ACKNOWLEDGE_HOLD
+            return (
+                f"review the hold, then: ops acknowledge_hold("
+                f"provider={provider!r}, hold_id=...)"
+            )
         if self.action is KeeperAction.OPERATOR_ACTION_REQUIRED:
-            return KeeperNextAction.REVIEW_ACCOUNT
+            # Terminal account/login verdicts are the one class where the
+            # owner knows facts the system cannot; never suggest a retry.
+            return (
+                f"account state changed for {provider} — verify the account "
+                f"manually; do not retry the login blindly"
+            )
+        if self.action is KeeperAction.CHECK_FAILED and self.recovery is not None:
+            return "session recovery completed; review the retained article diagnostic"
         if self.action is KeeperAction.CHECK_FAILED:
-            return KeeperNextAction.REVIEW_PROVIDER
-        if self.reason_code == "provider_defense":
-            # A challenged renewal plus browser-recovered HTTP reads indicates that
-            # the HTTP fingerprint may need repair rather than account replacement.
-            if self.http_challenges_24h:
-                return KeeperNextAction.UPDATE_HTTP_FINGERPRINT
-            return KeeperNextAction.REVIEW_PROVIDER
-        return KeeperNextAction.HEAL
+            # There is no session here to renew, so the usual repairs do not
+            # apply and suggesting one would send the reader in a circle. What
+            # drifted is the transport, and re-characterizing it by hand is the
+            # sanctioned repair (ROADMAP.md, "Reuters transport recovery").
+            return (
+                f"{provider} has no session to renew; its transport stopped "
+                f"serving. Review `newsclip health` and the retained incident, "
+                f"then re-characterize and re-pin — do not retry blindly"
+            )
+        return f"ops heal(provider={provider!r}) after reviewing `newsclip health`"
 
     @property
     def repair_hint(self) -> str | None:
@@ -355,18 +425,26 @@ class KeeperResult(FrozenModel):
                 "automatic article recovery missed its eligible deadline; "
                 "inspect the recovery watcher and keeper"
             )
-        if self.automatic_recovery_action == "retry_article":
-            due = (
-                self.automatic_recovery_due_at.isoformat()
-                if self.automatic_recovery_due_at
-                else "the next eligible cycle"
-            )
-            return (
-                "one credential-free retry of the exact article is scheduled "
-                f"for {due}; "
-                "no manual heal is needed"
-            )
-        if self.automatic_recovery_action == "wait_for_provider_check":
+        if self.automatic_recovery_action in {
+            "retry_article",
+            "wait_for_provider_check",
+        }:
+            if (
+                self.action in _ATTENTION_ACTIONS
+                and self.action is not KeeperAction.CHECK_FAILED
+            ):
+                return self._action_repair_hint()
+            if self.automatic_recovery_action == "retry_article":
+                due = (
+                    self.automatic_recovery_due_at.isoformat()
+                    if self.automatic_recovery_due_at
+                    else "the next eligible cycle"
+                )
+                return (
+                    "one credential-free retry of the exact article is scheduled "
+                    f"for {due}; "
+                    "no manual heal is needed"
+                )
             return (
                 "waiting for a newer healthy scheduled provider check; the keeper "
                 "will consume that proof once to recheck the exact article "
@@ -433,56 +511,7 @@ class KeeperResult(FrozenModel):
                 "can recheck the exact failed article once while budget, "
                 "backoff and guards permit"
             )
-        if self.reason_code in {
-            _VERIFICATION_UNRESOLVED,
-            "session_promotion_required",  # previously persisted outcomes
-            _PAID_PROBE_INCONCLUSIVE,
-        }:
-            # Verify before promoting: an unreadable probe does not establish
-            # failed entitlement. A FULL guarded canary requires both complete
-            # content and an identity match before a bounded renewal may clear
-            # the latch.
-            return (
-                f"review the retained probe and run ops provider_check("
-                f"provider={provider!r}); if healthy, run ops heal("
-                f"provider={provider!r}, allow_credential_mint=False). A failed "
-                "check alone does not establish an account problem"
-            )
-        if self.reason_code == _CREDENTIAL_MINT_NOT_PERMITTED:
-            return (
-                f"permit one bounded credential submission: newsclip auth keep "
-                f"{provider} --allow-credential-mint"
-            )
-        if self.reason_code == _CREDENTIAL_HOST_NOT_READY:
-            return (
-                f"this host cannot complete {provider}'s login; check "
-                f"`newsclip health` for the missing requirement"
-            )
-        if self.action is KeeperAction.HELD:
-            return (
-                f"review the hold, then: ops acknowledge_hold("
-                f"provider={provider!r}, hold_id=...)"
-            )
-        if self.action is KeeperAction.OPERATOR_ACTION_REQUIRED:
-            # Terminal account/login verdicts are the one class where the
-            # owner knows facts the system cannot; never suggest a retry.
-            return (
-                f"account state changed for {provider} — verify the account "
-                f"manually; do not retry the login blindly"
-            )
-        if self.action is KeeperAction.CHECK_FAILED and self.recovery is not None:
-            return "session recovery completed; review the retained article diagnostic"
-        if self.action is KeeperAction.CHECK_FAILED:
-            # There is no session here to renew, so the usual repairs do not
-            # apply and suggesting one would send the reader in a circle. What
-            # drifted is the transport, and re-characterizing it by hand is the
-            # sanctioned repair (ROADMAP.md, "Reuters transport recovery").
-            return (
-                f"{provider} has no session to renew; its transport stopped "
-                f"serving. Review `newsclip health` and the retained incident, "
-                f"then re-characterize and re-pin — do not retry blindly"
-            )
-        return f"ops heal(provider={provider!r}) after reviewing `newsclip health`"
+        return self._action_repair_hint()
 
     def public_dict(self) -> dict[str, Any]:
         omitted = {
@@ -764,6 +793,13 @@ class SessionKeeper:
                     decision is RenewalDecision.VERIFIED
                     and status is SessionStatus.VERIFIED
                 ):
+                    if (
+                        result.session_proof_verified
+                        and result.action is not KeeperAction.RENEWED
+                    ):
+                        return result.model_copy(
+                            update={"status": status, "session_proof_verified": True}
+                        )
                     return self._result(
                         provider=result.provider,
                         action=KeeperAction.RENEWED,
@@ -1200,29 +1236,47 @@ class SessionKeeper:
             read_only = record.reconciliation_started or (
                 current is not None and current != record.generation_id
             )
-            if not record.session_required or read_only:
-                # A teaser is content evidence, not a request to renew. Let
-                # the ordinary identity/FULL contract prove this exact URL.
-                # Reconciliation never replays an interrupted login, even if
-                # the read now establishes session loss.
-                try:
-                    reading_article = True
-                    self._sessions.verify_recovery_article(provider, str(record.url))
-                except SessionRequiredError:
-                    reading_article = False
-                    if read_only:
-                        raise
-                    record = store.require_session(record)
-                else:
-                    final = store.finish(record, reason=None, article_verified=True)
-                    return self._result(
-                        provider=provider, action=KeeperAction.CHECKED
-                    ).model_copy(update={"recovery": final.health})
-            result = self._keep(
-                provider,
-                allow_credential_mint=allow_credential_mint and record.session_required,
-                force_due=True,
+            hold = self._guard.peek(provider)
+            defense_scoped = (
+                not record.session_required
+                and not read_only
+                and self._sessions.requires_session_for_provider(provider)
+                and self._sessions.defense_pending(provider)
+                and getattr(hold, "action", None) in SESSION_EVIDENCE_ACTIONS
             )
+            scope = (
+                self._sessions.session_recovery_scope(provider)
+                if defense_scoped
+                else nullcontext()
+            )
+            with scope:
+                if not record.session_required or read_only:
+                    # A teaser is content evidence, not a request to renew. Let
+                    # the ordinary identity/FULL contract prove this exact URL.
+                    # Reconciliation never replays an interrupted login, even if
+                    # the read now establishes session loss.
+                    try:
+                        reading_article = True
+                        self._sessions.verify_recovery_article(
+                            provider, str(record.url)
+                        )
+                    except SessionRequiredError:
+                        reading_article = False
+                        if read_only:
+                            raise
+                        record = store.require_session(record)
+                    else:
+                        final = store.finish(record, reason=None, article_verified=True)
+                        return self._result(
+                            provider=provider, action=KeeperAction.CHECKED
+                        ).model_copy(update={"recovery": final.health})
+                result = self._keep(
+                    provider,
+                    allow_credential_mint=allow_credential_mint
+                    and record.session_required,
+                    force_due=True,
+                    _in_defense_scope=defense_scoped,
+                )
             if (
                 result.action is KeeperAction.RENEWED
                 and result.status is not SessionStatus.VERIFIED
@@ -1291,6 +1345,7 @@ class SessionKeeper:
         allow_credential_mint: bool,
         ignore_escalation: bool = False,
         force_due: bool = False,
+        _in_defense_scope: bool = False,
     ) -> KeeperResult:
         # Only session-evidence holds permit bounded renewal: verification is
         # their remedy. Existing warm-reuse, readiness and credential-budget guards
@@ -1335,12 +1390,24 @@ class SessionKeeper:
                 if blocked is not None:
                     return blocked
                 return self._defense_canary(provider)
+            # Check non-I/O blockers before consuming the defense probe gate so
+            # blocked cycles never re-arm retrieval defense.
+            blocked = self._defense_renewal_preflight_blocker(
+                provider, ignore_escalation=ignore_escalation
+            )
+            if blocked is not None:
+                return blocked
             # A previous read-only canary proved that authority needs renewal.
             # On a later eligible cycle, keep the ordinary warm-first remedy
             # (and its existing credential budget) under the same probe lock.
             # Reserving backoff spans BOTH warm and credential tiers.
+            scope = (
+                nullcontext()
+                if _in_defense_scope
+                else self._sessions.session_recovery_scope(provider)
+            )
             try:
-                with self._sessions.session_recovery_scope(provider):
+                with scope:
                     renewed = self._keep_session(
                         provider,
                         allow_credential_mint=allow_credential_mint,
@@ -1354,6 +1421,10 @@ class SessionKeeper:
                                 update={
                                     "status": renewed.status,
                                     "credential_attempt": renewed.credential_attempt,
+                                    "session_proof_verified": (
+                                        renewed.session_proof_verified
+                                    ),
+                                    "renewal_revision": renewed.renewal_revision,
                                 }
                             )
                     return renewed
@@ -1364,6 +1435,52 @@ class SessionKeeper:
             allow_credential_mint=allow_credential_mint,
             ignore_escalation=ignore_escalation,
             force_due=force_due,
+        )
+
+    def _defense_renewal_preflight_blocker(
+        self, provider: str, *, ignore_escalation: bool
+    ) -> KeeperResult | None:
+        blocked = self._connection_blocker_result(provider)
+        if blocked is not None:
+            return blocked
+        health = self._sessions.session_status(provider)
+        if health.status is SessionStatus.OPERATOR_ACTION:
+            return self._result(
+                provider=provider,
+                action=KeeperAction.OPERATOR_ACTION_REQUIRED,
+                status=health.status,
+                reason_code=_reason_code_value(health.failure_reason_code),
+            )
+        if health.status is SessionStatus.COOLDOWN and not self._cooldown_elapsed(
+            health
+        ):
+            return self._result(
+                provider=provider,
+                action=KeeperAction.COOLDOWN,
+                status=health.status,
+                reason_code=_reason_code_value(health.failure_reason_code),
+            )
+        if not ignore_escalation:
+            escalation = self._inconclusive_escalation(provider)
+            if escalation is not None and self._escalation_canary_exhausted(provider):
+                return escalation
+        return None
+
+    def _escalation_canary_exhausted(self, provider: str) -> bool:
+        if self._outcomes is None:
+            return True
+        try:
+            prior = self._outcomes.load(provider)
+        except PersistenceError:
+            raise
+        except Exception:  # noqa: BLE001 - missing history fails closed
+            return True
+        if prior is None or not prior.keeper_observed:
+            return True
+        spent_at = prior.last_escalation_canary_at
+        return (
+            spent_at is not None
+            and timedelta(0) <= self._utc_now() - spent_at < _WINDOW
         )
 
     def _keep_session(
@@ -1449,6 +1566,8 @@ class SessionKeeper:
             if result.action is GuardAction.HEALTHY
             else KeeperAction.COOLDOWN
             if result.action is GuardAction.TRANSIENT_FAILURE
+            else KeeperAction.BUSY
+            if result.action is GuardAction.CHECK_IN_PROGRESS
             else KeeperAction.HELD
         )
         return self._result(

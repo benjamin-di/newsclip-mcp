@@ -660,3 +660,34 @@ def test_a_refused_search_without_a_cooldown_pauses_nothing(tmp_path: Path) -> N
     _fixture_report(service)
     _fixture_report(service)
     assert len(http.calls) == 2
+
+
+def test_corroborated_assessed_challenge_attaches_incident_id_on_get_and_save(
+    tmp_path: Path,
+) -> None:
+    incidents_get = _incidents(tmp_path / "get")
+    service_get, _http_get, _defense_get = _service(
+        tmp_path / "get",
+        assessed_challenge=True,
+        http_status=403,
+        incidents=incidents_get,
+    )
+    with pytest.raises(ProviderDefenseError) as caught_get:
+        service_get.get(ARTICLE_URL)
+    capsules_get = list(incidents_get.iter_capsules())
+    assert len(capsules_get) == 1
+    assert caught_get.value.incident_id == capsules_get[0].incident_id
+
+    incidents_save = _incidents(tmp_path / "save")
+    service_save, _http_save, _defense_save = _service(
+        tmp_path / "save",
+        assessed_challenge=True,
+        http_status=403,
+        archive=FakeArchive(),
+        incidents=incidents_save,
+    )
+    with pytest.raises(ProviderDefenseError) as caught_save:
+        service_save.save(ARTICLE_URL)
+    capsules_save = list(incidents_save.iter_capsules())
+    assert len(capsules_save) == 1
+    assert caught_save.value.incident_id == capsules_save[0].incident_id

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,8 +16,10 @@ from uuid import uuid4
 from pydantic import HttpUrl
 
 from .account_keys import require_account_key
+from .browser_verification import _same_document
 from .connection_controls import ConnectionControls
-from .models import RawFetch, SessionArtifact
+from .errors import ProviderTransportError
+from .models import PortableCookie, RawFetch, SessionArtifact
 from .session_cookies import SessionCookiesMissing, normalize_browser_cookie_export
 from .sessions import SessionStore
 from .tenancy import application_root, load_users, require_user, user_scope
@@ -55,6 +57,36 @@ PUBLISHER_RESOURCES = {
 }
 
 
+def _has_session_cookie(
+    provider_key: str,
+    cookies: Sequence[PortableCookie],
+    *,
+    prefixes: tuple[str, ...],
+    allowed_domains: Collection[str],
+) -> bool:
+    def _domain_allowed(cookie: PortableCookie) -> bool:
+        host = cookie.domain.lower().lstrip(".")
+        return bool(host) and any(
+            host == domain or host.endswith(f".{domain}") for domain in allowed_domains
+        )
+
+    if provider_key == "nyt":
+        return any(
+            cookie.name.lower() == "nyt-s"
+            and bool(cookie.value)
+            and _domain_allowed(cookie)
+            for cookie in cookies
+        )
+    if prefixes:
+        return any(
+            cookie.name.lower().startswith(prefixes)
+            and bool(cookie.value)
+            and _domain_allowed(cookie)
+            for cookie in cookies
+        )
+    return any(bool(cookie.value) and _domain_allowed(cookie) for cookie in cookies)
+
+
 def human_signin(
     window: Any,
     *,
@@ -65,6 +97,7 @@ def human_signin(
 ) -> None:
     """Open the real site; all form entry and challenges belong to the person."""
 
+    from patchright.sync_api import Error as PlaywrightError
     from patchright.sync_api import sync_playwright
     from signin_window.automation.profiles import OwnedBrowserProcess
     from signin_window.automation.runtime import close_owned_browser
@@ -166,6 +199,9 @@ def human_signin(
                             response.request.is_navigation_request()
                             and response.frame == page.main_frame
                         ):
+                            status = getattr(response, "status", None)
+                            if type(status) is int and 300 <= status < 400:
+                                return
                             responses[:] = [response]
 
                 page.on("response", observe)
@@ -177,21 +213,29 @@ def human_signin(
                 while (
                     not window.cancelled.is_set() and time.monotonic() < window.deadline
                 ):
-                    now = datetime.now(UTC)
-                    window.at(urlsplit(page.url).hostname or "")
                     try:
-                        cookies = normalize_browser_cookie_export(
-                            context.cookies(),
+                        now = datetime.now(UTC)
+                        current_url = page.url
+                        current = urlsplit(current_url)
+                        window.at(current.hostname or "")
+                        try:
+                            cookies = normalize_browser_cookie_export(
+                                context.cookies(),
+                                allowed_domains=recipe.allowed_cookie_domains,
+                                now=now,
+                            )
+                        except SessionCookiesMissing:
+                            verifying = False
+                            page.wait_for_timeout(500)
+                            continue
+                        has_session_cookie = _has_session_cookie(
+                            provider_key,
+                            cookies,
+                            prefixes=session.session_cookie_name_prefixes,
                             allowed_domains=recipe.allowed_cookie_domains,
-                            now=now,
                         )
-                    except SessionCookiesMissing:
-                        page.wait_for_timeout(500)
-                        continue
-                    if not verifying:
-                        current = urlsplit(page.url)
                         login = urlsplit(str(auth.login_url))
-                        if (
+                        on_auth_or_outside = (
                             current.hostname not in spec.identity.allowed_hosts
                             or (
                                 current.hostname == login.hostname
@@ -201,54 +245,82 @@ def human_signin(
                                 current.path.startswith(prefix)
                                 for prefix in auth.auth_path_prefixes
                             )
-                            or (
-                                session.session_cookie_name_prefixes
-                                and not any(
-                                    cookie.name.lower().startswith(
-                                        session.session_cookie_name_prefixes
-                                    )
-                                    for cookie in cookies
-                                )
-                            )
-                        ):
+                        )
+                        if on_auth_or_outside or not has_session_cookie:
+                            verifying = False
                             page.wait_for_timeout(500)
                             continue
-                        verifying = True
-                        page.goto(
-                            recipe.verification_url,
-                            wait_until="domcontentloaded",
-                            timeout=45000,
-                        )
-                    if responses:
-                        response = responses[-1]
-                        from .browser_retrieval import read_bounded_page_content
-
-                        proof = RawFetch(
-                            requested_url=HttpUrl(recipe.verification_url),
-                            final_url=HttpUrl(page.url),
-                            http_status=response.status,
-                            content_type=response.headers.get("content-type"),
-                            retrieved_at=now,
-                            session_cookie_present=True,
-                            serving_transport="browser",
-                            raw_html=read_bounded_page_content(page),
-                        )
-                        verification = recipe.verify_fetch(proof)
-                        if verification.verified:
-                            window.saving()
-                            candidate = SessionArtifact(
-                                schema_version=2,
-                                browser_profile_id=profile_id,
-                                generation_id=uuid4(),
-                                provider=provider_key,
-                                account_key=account_key,
-                                created_at=now,
-                                verified_at=verification.verified_at,
-                                cookies=cookies,
-                                user_agent=page.evaluate("navigator.userAgent"),
+                        if not verifying:
+                            responses.clear()
+                            page.goto(
+                                recipe.verification_url,
+                                wait_until="domcontentloaded",
+                                timeout=45000,
                             )
+                            verifying = True
+                            current_url = page.url
+                            try:
+                                cookies = normalize_browser_cookie_export(
+                                    context.cookies(),
+                                    allowed_domains=recipe.allowed_cookie_domains,
+                                    now=now,
+                                )
+                            except SessionCookiesMissing:
+                                verifying = False
+                                page.wait_for_timeout(500)
+                                continue
+                            has_session_cookie = _has_session_cookie(
+                                provider_key,
+                                cookies,
+                                prefixes=session.session_cookie_name_prefixes,
+                                allowed_domains=recipe.allowed_cookie_domains,
+                            )
+                            if not has_session_cookie:
+                                verifying = False
+                                page.wait_for_timeout(500)
+                                continue
+                        if responses:
+                            response = responses[-1]
+                            if _same_document(
+                                getattr(response, "url", ""), current_url
+                            ):
+                                from .browser_retrieval import (
+                                    read_bounded_page_content,
+                                )
+
+                                proof = RawFetch(
+                                    requested_url=HttpUrl(recipe.verification_url),
+                                    final_url=HttpUrl(current_url),
+                                    http_status=response.status,
+                                    content_type=response.headers.get("content-type"),
+                                    retrieved_at=now,
+                                    session_cookie_present=has_session_cookie,
+                                    serving_transport="browser",
+                                    raw_html=read_bounded_page_content(page),
+                                )
+                                verification = recipe.verify_fetch(proof)
+                                if verification.verified:
+                                    window.saving()
+                                    candidate = SessionArtifact(
+                                        schema_version=2,
+                                        browser_profile_id=profile_id,
+                                        generation_id=uuid4(),
+                                        provider=provider_key,
+                                        account_key=account_key,
+                                        created_at=now,
+                                        verified_at=verification.verified_at,
+                                        cookies=cookies,
+                                        user_agent=page.evaluate("navigator.userAgent"),
+                                    )
+                                    break
+                        page.wait_for_timeout(500)
+                    except (ProviderTransportError, ValueError, PlaywrightError):
+                        is_closed = getattr(page, "is_closed", None)
+                        if callable(is_closed) and is_closed():
                             break
-                    page.wait_for_timeout(500)
+                        with suppress(PlaywrightError):
+                            page.wait_for_timeout(500)
+                        continue
             finally:
                 close_owned_browser(
                     context,

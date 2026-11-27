@@ -293,3 +293,23 @@ def test_article_success_without_recovery_creates_no_state(tmp_path):
     store = RecoveryStore(tmp_path / "absent")
     assert store.article_verified("bloomberg", URL, verified_at=NOW) is None
     assert not store.root.exists()
+
+
+def test_defer_transitions_orphaned_running_record_to_pending(tmp_path):
+    from newsclip.models import RecoveryStatus
+
+    store = RecoveryStore(tmp_path, utc_now=lambda: NOW)
+    request(store, uuid4())
+    claimed = store.claim("bloomberg", "cli-orphaned")
+    assert claimed is not None
+    assert claimed.health.status is RecoveryStatus.RUNNING
+
+    until = NOW + timedelta(minutes=30)
+    store.defer("bloomberg", until=until, reason="provider_held")
+
+    deferred = store.load("bloomberg")
+    assert deferred is not None
+    assert deferred.health.status is RecoveryStatus.PENDING
+    assert deferred.health.next_attempt_at == until
+    assert deferred.health.reason == "provider_held"
+    assert deferred.reconciliation_started is True

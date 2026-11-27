@@ -715,6 +715,8 @@ class IncidentStore:
                     continue
                 if directory.name in protected:
                     continue
+                if _corrupt_incident_provider(directory) != provider:
+                    continue
                 try:
                     shutil.rmtree(directory)
                     removed = True
@@ -1016,3 +1018,24 @@ def _read_bounded(path: Path, *, maximum: int, message: str) -> bytes:
     if len(payload) > maximum:
         raise IncidentPersistenceError(message)
     return payload
+
+
+def _corrupt_incident_provider(directory: Path) -> str | None:
+    """Best-effort provider attribution for a corrupt incident directory."""
+
+    metadata = directory / "incident.json"
+    if metadata.is_symlink() or not metadata.is_file():
+        return None
+    try:
+        payload = _read_bounded(
+            metadata,
+            maximum=_MAX_INCIDENT_METADATA_BYTES,
+            message="incident metadata unavailable",
+        )
+        document = json.loads(payload)
+    except (IncidentPersistenceError, OSError, ValueError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    owner = document.get("provider")
+    return owner if isinstance(owner, str) else None

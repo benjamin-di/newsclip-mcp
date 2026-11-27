@@ -215,3 +215,54 @@ def test_watcher_entrypoint_uses_the_configured_account(monkeypatch, tmp_path):
         module.main()
     assert observed == [tmp_path / "users/alice/recovery", "closed"]
     assert current_user() is None
+
+
+def test_orphaned_running_record_under_hold_does_not_spin_watcher(tmp_path):
+    from datetime import timedelta
+
+    from newsclip.models import RecoveryStatus
+
+    store = RecoveryStore(tmp_path, utc_now=lambda: NOW)
+    store.request(
+        "ft",
+        generation_id=None,
+        url="https://ft.test/article",
+        incident_id=None,
+        diagnostic_id=None,
+    )
+    claimed = store.claim("ft", "cli-orphaned")
+    assert claimed is not None
+    assert claimed.health.status is RecoveryStatus.RUNNING
+
+    calls = []
+
+    def run(provider, *_):
+        calls.append(provider)
+        with store.operation(provider):
+            store.defer(
+                provider,
+                until=NOW + timedelta(hours=1),
+                reason="provider_held",
+            )
+        return {"provider": provider, "action": "held"}
+
+    watcher = RecoveryWatch(
+        store,
+        ("ft",),
+        allow_credentials=False,
+        runner=run,
+        utc_now=lambda: NOW,
+    )
+    try:
+        watcher.tick()
+        for future in tuple(watcher.active.values()):
+            future.result(timeout=5)
+        watcher.tick()
+        assert not watcher.active
+        assert calls == ["ft"]
+        record = store.load("ft")
+        assert record is not None
+        assert record.health.status is RecoveryStatus.PENDING
+        assert record.health.next_attempt_at == NOW + timedelta(hours=1)
+    finally:
+        watcher.close()

@@ -202,10 +202,17 @@ class OpsAdapter:
             max_workers=2, thread_name_prefix="newsclip-ops-heal"
         )
         self._heals: dict[str, Future[CommandOutcome]] = {}
-        self._last_heal: dict[str, dict[str, Any]] = {}
-        self._lock = threading.Lock()
+        self._last_heal: dict[str, tuple[Future[CommandOutcome], dict[str, Any]]] = {}
+        self._lock = threading.RLock()
 
     # -- heal ------------------------------------------------------------
+
+    @staticmethod
+    def _future_payload(done: Future[CommandOutcome]) -> dict[str, Any]:
+        try:
+            return done.result().payload()
+        except Exception as error:  # noqa: BLE001 - recorded, never raised here
+            return {"error": type(error).__name__}
 
     def start_heal(
         self,
@@ -233,31 +240,33 @@ class OpsAdapter:
                 self._runner, args, None, _HEAL_TIMEOUT_SECONDS
             )
             self._heals[provider] = future
-        # Registered OUTSIDE the lock, deliberately. add_done_callback runs the
-        # callback inline in this thread when the future has already finished —
-        # and a heal can finish that fast (a held provider returns immediately).
-        # _record_heal takes the same non-reentrant lock, so registering here
-        # while holding it deadlocks the ops server permanently.
-        future.add_done_callback(partial(self._record_heal, provider))
+            self._last_heal.pop(provider, None)
+            # Re-entrant lock allows add_done_callback to run _record_heal
+            # inline when the future has already finished without deadlocking
+            # or opening an unlocked window between publishing and registering.
+            future.add_done_callback(partial(self._record_heal, provider))
         return {"provider": provider, "status": "started"}
 
     def _record_heal(self, provider: str, done: Future[CommandOutcome]) -> None:
-        try:
-            payload = done.result().payload()
-        except Exception as error:  # noqa: BLE001 - recorded, never raised here
-            payload = {"error": type(error).__name__}
+        payload = self._future_payload(done)
         with self._lock:
-            self._last_heal[provider] = payload
+            if self._heals.get(provider) is done:
+                self._last_heal[provider] = (done, payload)
 
     def heal_state(self, provider: str) -> dict[str, Any] | None:
         with self._lock:
             running = self._heals.get(provider)
-            if running is not None and not running.done():
+            if running is None:
+                return None
+            if not running.done():
                 return {"status": "in_progress"}
-            last = self._last_heal.get(provider)
-            if last is not None:
-                return {"status": "completed", "result": last}
-        return None
+            recorded = self._last_heal.get(provider)
+            if recorded is not None and recorded[0] is running:
+                payload = recorded[1]
+            else:
+                payload = self._future_payload(running)
+                self._last_heal[provider] = (running, payload)
+            return {"status": "completed", "result": payload}
 
     # -- synchronous CLI verbs ------------------------------------------
 

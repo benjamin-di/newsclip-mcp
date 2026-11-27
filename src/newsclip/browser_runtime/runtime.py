@@ -80,6 +80,7 @@ from .events import (
     SemanticActionFinishedEvent,
     SemanticActionStartedEvent,
     SemanticReadinessTerminalEvent,
+    SurfaceMode,
     duration_bucket,
     hcaptcha_surface_miss_bucket,
 )
@@ -1644,7 +1645,7 @@ class PatchrightRuntime:
                 manager, context = self._launch(
                     profile,
                     selected_launch,
-                    isolate_display=browser_mode is BrowserMode.HEADED_VIRTUAL,
+                    isolate_display=self._should_isolate_display(browser_mode),
                 )
                 if self._context_factory is None:
                     process = OwnedBrowserProcess.capture(profile)
@@ -1946,6 +1947,20 @@ class PatchrightRuntime:
         if display_context is not None:
             manager = _IsolatedBrowserManager(manager, display_context, display)
         return manager, context
+
+    @staticmethod
+    def _should_isolate_display(browser_mode: BrowserMode) -> bool:
+        if browser_mode is not BrowserMode.HEADED_VIRTUAL:
+            return False
+        if os.environ.get("NEWSCLIP_INSIDE_BWRAP_XVFB") == "1":
+            return False
+        if os.environ.get("NEWSCLIP_TIMING_SURFACE") in {
+            SurfaceMode.DOCKER_XVFB_BWRAP.value,
+            SurfaceMode.MANAGED_VIRTUAL.value,
+        }:
+            return False
+        display = os.environ.get("DISPLAY", "")
+        return not (display and not display.startswith(":"))
 
     @staticmethod
     def _browser_mode(require_virtual_display: bool) -> BrowserMode:

@@ -88,3 +88,41 @@ def test_extraction_falls_back_to_utf8_without_a_declaration(
 
     assert "Café’s résumé" in extraction.body_markdown
     assert "\ufffd" not in extraction.body_markdown
+
+
+def test_extraction_preserves_scoped_body_and_json_ld_on_xhtml() -> None:
+    xhtml = f"""<?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+      "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+    <html xmlns="http://www.w3.org/1999/xhtml"><head>
+      <title>XHTML market report</title>
+      <link rel="canonical" href="{ARTICLE_URL}" />
+      <script type="application/ld+json">{{
+        "@context": "https://schema.org",
+        "@type": "NewsArticle",
+        "headline": "XHTML market report",
+        "datePublished": "2026-07-28T10:15:00Z",
+        "articleSection": "Markets",
+        "author": {{"@type": "Person", "name": "Fixture Reporter"}}
+      }}</script>
+    </head><body><main><article>
+      <h1>XHTML market report</h1>
+      <p>{"Substantive XHTML reporting proves scoped extraction works. " * 12}</p>
+    </article></main></body></html>
+    """.encode()
+    raw = RawFetch(
+        requested_url=ARTICLE_URL,
+        final_url=ARTICLE_URL,
+        http_status=200,
+        content_type="application/xhtml+xml; charset=utf-8",
+        retrieved_at=NOW,
+        raw_html=xhtml,
+    )
+
+    extraction = TrafilaturaExtractor().extract(raw, scope_xpath=("//main//article",))
+
+    assert "Substantive XHTML reporting proves scoped extraction works." in (
+        extraction.body_markdown
+    )
+    assert extraction.metadata["date"] == "2026-07-28T10:15:00Z"
+    assert extraction.metadata["categories"] == ["Markets"]

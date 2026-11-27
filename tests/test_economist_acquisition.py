@@ -1098,3 +1098,28 @@ def test_settle_verification_context_retries_transient_navigation(
 
     assert calls == 2
     assert adapter._recipe.verify_fetch(fetch).verified
+
+
+def test_settle_verification_context_retries_provider_transport_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from newsclip.errors import ProviderTransportError
+
+    browser = FakeBrowser([], cookies=[_cookie()])
+    adapter = _adapter(tmp_path)
+    original_fetch = adapter._browser_article_fetch
+    calls = 0
+
+    def fetch_with_transient_error(active_browser, observed):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ProviderTransportError("browser verification document changed")
+        return original_fetch(active_browser, observed)
+
+    monkeypatch.setattr(adapter, "_browser_article_fetch", fetch_with_transient_error)
+
+    fetch = adapter._settle_verification_context(browser, ChallengeMode.AUTO)
+
+    assert calls == 2
+    assert adapter._recipe.verify_fetch(fetch).verified
