@@ -823,6 +823,7 @@ def run_http(
         log_config=uvicorn_log_config(),
         proxy_headers=False,
         server_header=False,
+        timeout_keep_alive=65,
     )
 
 

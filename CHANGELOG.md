@@ -3,6 +3,28 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.3.4] - 2026-11-27
+
+### Fixed
+
+- Apply `timeout_keep_alive=65` to the standalone (`newsclip serve`) and sign-in uvicorn servers in addition to `run_http`, so reverse proxies can reuse idle connections without closing races.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.3.3; saved sessions, account controls and configuration formats are unchanged.
+
+## [2.3.3] - 2026-11-27
+
+### Changed
+
+- Keep HTTP keep-alive connections open for 65 seconds in uvicorn (`timeout_keep_alive=65`) so reverse proxies can reuse idle upstream connections without closing races.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.3.2; saved sessions, account controls and configuration formats are unchanged.
+
 ## [2.3.2] - 2026-11-27
 
 ### Fixed

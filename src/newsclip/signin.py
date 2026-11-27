@@ -453,4 +453,5 @@ def run_signin_service(*, host: str = "127.0.0.1", port: int = 8080) -> None:
         log_config=uvicorn_log_config(),
         proxy_headers=False,
         server_header=False,
+        timeout_keep_alive=65,
     )

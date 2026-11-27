@@ -673,4 +673,5 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8000) -> None:
         log_config=uvicorn_log_config(),
         proxy_headers=False,
         server_header=False,
+        timeout_keep_alive=65,
     )
