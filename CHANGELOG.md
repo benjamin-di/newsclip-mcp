@@ -3,6 +3,17 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.3.2] - 2026-11-27
+
+### Fixed
+
+- Await the `POST /cancel` response before closing the browser tab in `scripts/standalone_e2e.py` so the offline image acceptance test does not abort the cancellation request under `signin-window` `0.13` (`reconnect=True`).
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.3.1, 2.3.0, and 2.2.5; no storage or configuration changes.
+
 ## [2.3.1] - 2026-11-27
 
 ### Fixed

@@ -549,9 +549,15 @@ async def main() -> None:
                 await page.wait_for_url("**/users/alice/connect/*")
                 # Owner-bound: the window opens on its own.
                 await page.wait_for_selector("iframe", timeout=30000)
-                await page.get_by_role(
-                    "button", name="Cancel sign-in", exact=True
-                ).click()
+                async with page.expect_response(
+                    lambda response: (
+                        response.request.method == "POST"
+                        and response.url.endswith("/cancel")
+                    )
+                ):
+                    await page.get_by_role(
+                        "button", name="Cancel sign-in", exact=True
+                    ).click()
                 await page.close()
                 for _ in range(100):
                     if all(
