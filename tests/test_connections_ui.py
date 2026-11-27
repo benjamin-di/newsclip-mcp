@@ -1,4 +1,4 @@
-"""Rendering contract tests for Newsclip Connections pages on signin-window 0.13."""
+"""Rendering contract tests for Newsclip Connections pages on signin-window."""
 
 from __future__ import annotations
 
@@ -139,7 +139,7 @@ def test_suite_switcher_and_endpoint_appear_only_when_configured(
     app_plain, _, _ = make_app(accounts, tmp_path / "plain", browser_url=HTTPS_ORIGIN)
     with TestClient(app_plain, base_url=HTTPS_ORIGIN) as client:
         browser_login(app_plain, client, "alice")
-        resp = client.get("/connections/")
+        resp = client.get("/")
         assert resp.status_code == 200
         plain = _PageInspector(resp.text)
         assert plain.has_hero
@@ -150,7 +150,7 @@ def test_suite_switcher_and_endpoint_appear_only_when_configured(
     app_suite, _, _ = make_app(accounts, tmp_path / "suite", browser_url=HTTPS_ORIGIN)
     with TestClient(app_suite, base_url=HTTPS_ORIGIN) as client:
         browser_login(app_suite, client, "alice")
-        resp = client.get("/connections/")
+        resp = client.get("/")
         assert resp.status_code == 200
         with_suite = _PageInspector(resp.text)
         assert with_suite.has_hero
@@ -162,7 +162,7 @@ def test_suite_switcher_and_endpoint_appear_only_when_configured(
 
         # Unmapped user 403 page shows neither the switcher nor the assistant address.
         browser_login(app_suite, client, "unregistered")
-        denied = client.get("/connections/")
+        denied = client.get("/")
         assert denied.status_code == 403
         denied_view = _PageInspector(denied.text)
         assert not denied_view.has_suite_switch
@@ -190,7 +190,7 @@ def test_reworked_states_emit_expected_badge_tones_forms_and_kit_structure(
         service._keeper_outcomes = outcomes
 
         # 1. Not connected -> neutral badge, Connect form with exact fields, logout form
-        not_conn = _PageInspector(client.get("/connections/").text)
+        not_conn = _PageInspector(client.get("/").text)
         assert not_conn.has_hero
         assert any(
             cls == "badge" and text == "Not connected" for cls, text in not_conn.badges
@@ -210,7 +210,7 @@ def test_reworked_states_emit_expected_badge_tones_forms_and_kit_structure(
         candidate, proof = material()
         selected.promote_browser_session(candidate, proof, expected_generation=None)
         revision = portal.controls["alice"].status("fixture")["revision"]
-        working = _PageInspector(client.get("/connections/").text)
+        working = _PageInspector(client.get("/").text)
         assert working.has_facts
         assert working.has_rows
         assert any(
@@ -242,7 +242,7 @@ def test_reworked_states_emit_expected_badge_tones_forms_and_kit_structure(
             "default",
             StoredSession(status=SessionStatus.VERIFIED, artifact=stale_artifact),
         )
-        stale = _PageInspector(client.get("/connections/").text)
+        stale = _PageInspector(client.get("/").text)
         assert any(
             cls == "badge warn" and text == "Needs check" for cls, text in stale.badges
         )
@@ -258,7 +258,7 @@ def test_reworked_states_emit_expected_badge_tones_forms_and_kit_structure(
                 max_age_hours=12.0,
             )
         )
-        degraded = _PageInspector(client.get("/connections/").text)
+        degraded = _PageInspector(client.get("/").text)
         assert any(
             cls == "badge bad" and text == "Degraded" for cls, text in degraded.badges
         )
@@ -273,7 +273,7 @@ def test_reworked_states_emit_expected_badge_tones_forms_and_kit_structure(
                 failure_reason_code="credential_rejected",
             ),
         )
-        action_needed = _PageInspector(client.get("/connections/").text)
+        action_needed = _PageInspector(client.get("/").text)
         assert any(
             cls == "badge bad" and text == "Action needed"
             for cls, text in action_needed.badges
@@ -282,7 +282,7 @@ def test_reworked_states_emit_expected_badge_tones_forms_and_kit_structure(
         # 6. Connecting -> info pulsing badge + Cancel form with revision
         owner_connection(client)
         conn_rev = portal.controls["alice"].status("fixture")["revision"]
-        connecting = _PageInspector(client.get("/connections/").text)
+        connecting = _PageInspector(client.get("/").text)
         assert any(
             "badge" in cls and "info" in cls and text == "Sign-in open"
             for cls, text in connecting.badges
@@ -351,7 +351,7 @@ def test_account_controlled_text_is_escaped(accounts, tmp_path, monkeypatch):
             }
 
         monkeypatch.setattr(portal.auth, "identity", malicious_identity)
-        resp = client.get("/connections/")
+        resp = client.get("/")
         assert resp.status_code == 200
         assert "<script>alert(" not in resp.text
         assert "<img src=x" not in resp.text

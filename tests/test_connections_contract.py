@@ -89,7 +89,7 @@ def test_aged_valid_session_completes_share_and_disconnect_without_reauth(
             follow_redirects=False,
         )
         assert response.status_code == 303
-        assert response.headers["location"] == "/connections/"
+        assert response.headers["location"] == "/"
         assert "reauth" not in response.headers["location"]
         if action == "share":
             assert "bob" in portal.access.view("alice", "fixture")[0]["grants"]
@@ -114,7 +114,7 @@ def test_signed_out_login_returns_home_without_replaying_action(
             data.update(member="bob", grant="new")
         before = snapshot(portal)
 
-        signed_out_get = client.get("/connections/", follow_redirects=False)
+        signed_out_get = client.get("/", follow_redirects=False)
         assert signed_out_get.status_code == 303
         assert signed_out_get.headers["location"] == "/connections/login"
         assert "reauth" not in signed_out_get.headers["location"]
@@ -140,7 +140,7 @@ def test_signed_out_login_returns_home_without_replaying_action(
             callback.path + "?" + callback.query, follow_redirects=False
         )
         assert confirmed.status_code == 303
-        assert confirmed.headers["location"] == "/connections/"
+        assert confirmed.headers["location"] == "/"
         assert client.get(confirmed.headers["location"]).status_code == 200
         assert snapshot(portal) == before
 
@@ -151,7 +151,7 @@ def test_signed_out_login_returns_home_without_replaying_action(
             follow_redirects=False,
         )
         assert repeated.status_code == 303
-        assert repeated.headers["location"] == "/connections/"
+        assert repeated.headers["location"] == "/"
         if action == "share":
             assert "bob" in portal.access.view("alice", "fixture")[0]["grants"]
         else:
@@ -170,7 +170,7 @@ def test_browser_share_choose_revoke_and_leave_keep_explicit_selection(
         portal.adapters["alice"]._service_ready()._sessions = selected
         access = portal.access
         browser_login(app, client, "alice")
-        page = client.get("/connections/")
+        page = client.get("/")
         assert "Shared with" in page.text
         assert "Using my subscription." in page.text
         revision = portal.controls["alice"].status("fixture")["revision"]
@@ -189,7 +189,7 @@ def test_browser_share_choose_revoke_and_leave_keep_explicit_selection(
         # Offering access cannot switch the recipient's selected account.
         assert access.admit("bob", "fixture").owner == "bob"
         browser_login(app, client, "bob")
-        assert "alice's subscription" in unescape(client.get("/connections/").text)
+        assert "alice's subscription" in unescape(client.get("/").text)
         row, offers, _ = access.view("bob", "fixture")
         grant = dict(offers)["alice"]
         chosen = client.post(
@@ -205,9 +205,7 @@ def test_browser_share_choose_revoke_and_leave_keep_explicit_selection(
         )
         assert chosen.status_code == 303
         assert access.admit("bob", "fixture").owner == "alice"
-        assert "Using alice's subscription." in unescape(
-            client.get("/connections/").text
-        )
+        assert "Using alice's subscription." in unescape(client.get("/").text)
 
         browser_login(app, client, "alice")
         revoked = client.post(
@@ -220,7 +218,7 @@ def test_browser_share_choose_revoke_and_leave_keep_explicit_selection(
         with pytest.raises(SessionRequiredError, match="^shared_access_removed$"):
             access.admit("bob", "fixture")
         browser_login(app, client, "bob")
-        assert "selected shared access was removed" in client.get("/connections/").text
+        assert "selected shared access was removed" in client.get("/").text
         # Recovering from revocation still requires an explicit selection.
         row = access.view("bob", "fixture")[0]
         own = client.post(
@@ -249,4 +247,4 @@ def test_browser_share_choose_revoke_and_leave_keep_explicit_selection(
         assert left.status_code == 303
         with pytest.raises(SessionRequiredError, match="^account_selection_needed$"):
             access.admit("bob", "fixture")
-        assert "No subscription selected." in client.get("/connections/").text
+        assert "No subscription selected." in client.get("/").text

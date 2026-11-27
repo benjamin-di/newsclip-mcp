@@ -233,9 +233,12 @@ class Connections:
             config.oidc,
             transport=transport,
             clock=clock,
+            home="/",
             **renderer_options(BrowserAuth),
         )
-        self.home = urlsplit(config.oidc.public_url).path.rstrip("/") + "/connections/"
+        prefix = urlsplit(config.oidc.public_url).path.rstrip("/")
+        self.home = prefix + "/"
+        self.connections_base = prefix + "/connections/"
         self.relays, self.adapters, self.controls, self.links = {}, {}, {}, {}
         self.access: SubscriptionAccess | None = None
         self._start_locks: dict[tuple[str, str], threading.Lock] = {}
@@ -679,7 +682,7 @@ class Connections:
         selected = self.adapters[user]._service_ready()._registry.get(provider)
         if selected.login_recipe is None:
             raise UsageError("this provider does not require sign-in")
-        return self.config.oidc.public_url.rstrip("/") + "/connections/#" + provider
+        return self.config.oidc.public_url.rstrip("/") + "/#" + provider
 
     def _store(self, user):
         source = self.adapters[user]._service_ready()._sessions
@@ -1029,7 +1032,7 @@ class Connections:
             body,
             intro=intro,
             refresh=refresh,
-            login_url=self.home + "login",
+            login_url=self.connections_base + "login",
             suite=suite,
             **renderer_options(connection_page),
         )
@@ -1055,7 +1058,7 @@ class Connections:
         )
         cls = f' class="{kind}"' if kind else ""
         form = (
-            f'<form method="post" action="{self.home}{action}">'
+            f'<form method="post" action="{self.connections_base}{action}">'
             '<input type="hidden" name="provider" '
             f'value="{html.escape(provider)}">{fence}'
             f"<button{cls}>{html.escape(text)}</button></form>"
@@ -1074,10 +1077,10 @@ class Connections:
     async def index(self, request):
         identity = self.auth.identity(request)
         if not identity:
-            return RedirectResponse(self.home + "login", status_code=303)
+            return RedirectResponse(self.connections_base + "login", status_code=303)
         user = self.user(request)
         if user is None:
-            logout_action = html.escape(self.home + "logout", quote=True)
+            logout_action = html.escape(self.connections_base + "logout", quote=True)
             return HTMLResponse(
                 self.page(
                     render_error_card(
@@ -1380,12 +1383,14 @@ class Connections:
             card_parts.append("</article>")
             cards.append("".join(card_parts))
 
-        logout_action = html.escape(self.home + "logout", quote=True)
+        logout_action = html.escape(self.connections_base + "logout", quote=True)
         body = (
             f"<style>{CONNECTIONS_STYLE}</style>"
             + render_overview(
                 effective_tones,
-                check_all_action=self.home + "check-all" if any_checkable else None,
+                check_all_action=self.connections_base + "check-all"
+                if any_checkable
+                else None,
                 any_checking=any_checking,
             )
             + f'<div class="nc-cards">{"".join(cards)}</div>'
@@ -1475,7 +1480,7 @@ class Connections:
                 else ""
             )
             choose_own = action_form(
-                self.home + "choose",
+                self.connections_base + "choose",
                 {
                     "provider": provider,
                     "owner": user,
@@ -1510,7 +1515,7 @@ class Connections:
             if not is_selected:
                 row_actions.append(
                     action_form(
-                        self.home + "choose",
+                        self.connections_base + "choose",
                         {
                             "provider": provider,
                             "owner": owner,
@@ -1522,7 +1527,7 @@ class Connections:
                 )
             row_actions.append(
                 action_form(
-                    self.home + "leave",
+                    self.connections_base + "leave",
                     {"provider": provider, "owner": owner, "grant": grant},
                     "Leave " + owner + "'s shared subscription"
                     if selected and selected["owner"] == owner
@@ -1573,7 +1578,7 @@ class Connections:
             if grant:
                 member_badge = render_pill("Shared", "ok")
                 btn = action_form(
-                    self.home + "unshare",
+                    self.connections_base + "unshare",
                     {"provider": provider, "member": member, "grant": grant},
                     "Stop sharing",
                     danger=True,
@@ -1581,7 +1586,7 @@ class Connections:
             elif status["state"] == "connected":
                 member_badge = ""
                 btn = action_form(
-                    self.home + "share",
+                    self.connections_base + "share",
                     {
                         "provider": provider,
                         "member": member,
@@ -1934,8 +1939,17 @@ class Connections:
         return RedirectResponse(self.home + "#" + provider, status_code=303)
 
     def routes(self):
+        async def legacy_home(_request):
+            return RedirectResponse(
+                self.home,
+                status_code=308,
+                headers={"Cache-Control": "no-store"},
+            )
+
         routes = [
-            Route("/connections/", self.index),
+            Route("/", self.index),
+            Route("/connections", legacy_home),
+            Route("/connections/", legacy_home),
             Route("/connections/status", self.status),
             *self.auth.routes(),
             *(

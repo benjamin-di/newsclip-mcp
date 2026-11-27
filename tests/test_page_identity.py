@@ -66,7 +66,7 @@ def test_home_uses_installed_identity_despite_runtime_overrides(
     with TestClient(app, base_url=ORIGIN) as client:
         browser_login(app, client)
         before = snapshot(app.state.connections)
-        response = client.get("/connections/")
+        response = client.get("/")
         assert response.status_code == 200
         assert "News subscriptions" in response.text
         assert "Connect the subscription you want to use." in response.text
@@ -172,14 +172,14 @@ def test_relay_pages_keep_owner_checks_text_and_outcomes(accounts, tmp_path, cas
                 response.text.split("const CONFIG = ", 1)[1].split(";</script>", 1)[0]
             )
             assert config["autoStart"] is True and config["reconnect"] is True
-            assert config["returnUrl"] == "/connections/"
+            assert config["returnUrl"] == "/"
             assert config["noRetry"] == ["connected", "expired", "limited"]
             assert "Connection saved" in config["outcomes"]["connected"]
             assert "We could not confirm the connection" in config["outcomes"]["failed"]
             assert "Sign-in cancelled" in config["outcomes"]["cancelled"]
         elif case == "expired":
             assert "This link has expired" in response.text
-            assert 'href="/connections/"' in response.text
+            assert 'href="/"' in response.text
         elif case == "unavailable":
             assert "This sign-in request is unavailable" in response.text
             assert "Connect fixture to Newsclip" not in response.text
@@ -244,7 +244,7 @@ def test_host_fields_are_escaped_and_full_revision_is_retained(
     app, _, _ = make_app(accounts, tmp_path)
     with TestClient(app, base_url=ORIGIN) as client:
         browser_login(app, client)
-        response = client.get("/connections/")
+        response = client.get("/")
         assert response.status_code == 200
         assert_identity(response.text, renderer.page, build)
         assert build.version not in response.text

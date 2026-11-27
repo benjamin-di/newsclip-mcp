@@ -229,7 +229,7 @@ class UserAuth:
                     and self.connections
                 ):
                     await RedirectResponse(
-                        self.connections.home + "login", status_code=303
+                        self.connections.connections_base + "login", status_code=303
                     )(scope, receive, send)
                 else:
                     await Response(status_code=404)(scope, receive, send)

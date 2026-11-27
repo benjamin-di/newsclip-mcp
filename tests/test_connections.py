@@ -81,7 +81,7 @@ def test_verified_browser_owner_is_independent_of_mcp_credentials(accounts, tmp_
     app, tokens, _ = make_app(accounts, tmp_path)
     with TestClient(app, base_url="http://127.0.0.1") as client:
         handoff = connection(client, tokens["alice"])
-        assert handoff.endswith("/connections/#fixture")
+        assert handoff.endswith("/#fixture")
         signed_out = client.get(handoff, follow_redirects=False)
         assert signed_out.status_code == 303
         assert signed_out.headers["location"] == "/connections/login"
@@ -163,7 +163,7 @@ def test_browser_origin_never_admits_mcp_or_native_api(accounts, tmp_path, monke
             headers=bearer,
         )
         assert result.status_code == 200
-        assert result.json()["result"]["url"] == browser + "/connections/#fixture"
+        assert result.json()["result"]["url"] == browser + "/#fixture"
         browser_login(app, client)
         started = client.post(
             "/connections/start",
@@ -203,8 +203,13 @@ def test_browser_origin_never_admits_mcp_or_native_api(accounts, tmp_path, monke
             == 200
         )
         assert client.get(viewer.replace(browser, api)).status_code == 403
+        assert client.get(api + "/").status_code == 403
         assert client.get(api + "/connections/").status_code == 403
-        assert client.get(browser + "/connections/").status_code == 200
+        assert client.get(browser + "/").status_code == 200
+        legacy = client.get(browser + "/connections/", follow_redirects=False)
+        assert legacy.status_code == 308
+        assert legacy.headers["location"] == "/"
+        assert legacy.headers["cache-control"] == "no-store"
         for authority, sent_origin in ((api + ":8443", None), (api, api + ":8443")):
             headers = {**bearer, **({"origin": sent_origin} if sent_origin else {})}
             assert (
@@ -227,6 +232,7 @@ def test_browser_origin_never_admits_mcp_or_native_api(accounts, tmp_path, monke
             ).status_code
             == 403
         )
+        assert client.get(api + ":8443/").status_code == 403
         assert client.get(api + ":8443/connections/").status_code == 403
     monkeypatch.setenv("NEWSCLIP_MCP_PUBLIC_URL_ALIASES", browser)
     with pytest.raises(ValueError, match="browser origin"):
@@ -325,7 +331,7 @@ def test_aged_valid_session_completes_disconnect_without_reauth(accounts, tmp_pa
             follow_redirects=False,
         )
         assert response.status_code == 303
-        assert response.headers["location"] == "/connections/"
+        assert response.headers["location"] == "/"
         assert "reauth" not in response.headers["location"]
         assert controls.status("fixture")["phase"] == 1
 
@@ -375,7 +381,7 @@ def test_interrupted_attempt_can_be_cancelled_without_in_memory_link(
         controls = portal.controls["alice"]
         revision = controls.status("fixture")["revision"]
         portal.links.clear()
-        assert "Your sign-in may still be finishing" in client.get("/connections/").text
+        assert "Your sign-in may still be finishing" in client.get("/").text
         assert (
             client.post(
                 "/connections/cancel",
@@ -603,7 +609,7 @@ def test_start_new_sign_in_layout_429_and_stuck_teardown(accounts, tmp_path):
             ).status_code
             == 200
         )
-        page = client.get("/connections/").text
+        page = client.get("/").text
         assert "Sign-in is in progress (mobile view)" in page
         assert "Continue sign-in" in page
         assert "Start new sign-in" in page
@@ -703,7 +709,7 @@ def test_start_new_sign_in_layout_429_and_stuck_teardown(accounts, tmp_path):
             ).status_code
             == 409
         )
-        assert "Saving connection" in client.get("/connections/").text
+        assert "Saving connection" in client.get("/").text
 
 
 def test_access_status_reflects_fresh_stale_degraded_and_operator_action(
@@ -731,7 +737,7 @@ def test_access_status_reflects_fresh_stale_degraded_and_operator_action(
         status = client.get("/connections/status").json()["providers"][0]
         assert status["access_status"] == "working"
         assert status["health"] == "fresh"
-        page = client.get("/connections/").text
+        page = client.get("/").text
         assert "Working" in page
         assert "Check access" in page
         assert "Check all" in page
@@ -759,7 +765,7 @@ def test_access_status_reflects_fresh_stale_degraded_and_operator_action(
         status = client.get("/connections/status").json()["providers"][0]
         assert status["access_status"] == "stale"
         assert status["health"] == "stale"
-        assert "Needs check" in client.get("/connections/").text
+        assert "Needs check" in client.get("/").text
 
         # 3. Degraded session (3 consecutive renewal failures) -> Degraded
         outcomes._write(
@@ -777,7 +783,7 @@ def test_access_status_reflects_fresh_stale_degraded_and_operator_action(
         assert status["access_status"] == "degraded"
         assert status["health"] == "degraded"
         assert status["consecutive_renewal_failures"] == 3
-        page = client.get("/connections/").text
+        page = client.get("/").text
         assert "Degraded" in page
         assert "Automatic renewal failed 3 times" in page
 
@@ -793,7 +799,7 @@ def test_access_status_reflects_fresh_stale_degraded_and_operator_action(
         )
         status = client.get("/connections/status").json()["providers"][0]
         assert status["access_status"] == "action_required"
-        page = client.get("/connections/").text
+        page = client.get("/").text
         assert "Action needed" in page
         assert "account alert" in page
 
@@ -847,12 +853,12 @@ def test_live_check_access_updates_status_and_handles_failure_and_inconclusive(
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert resp.headers["location"] == "/connections/#fixture"
+        assert resp.headers["location"] == "/#fixture"
         portal.wait_checks()
         status = client.get("/connections/status").json()["providers"][0]
         assert status["access_status"] == "working"
         assert status["last_check"]["state"] == "passed"
-        assert "Live check passed" in client.get("/connections/").text
+        assert "Live check passed" in client.get("/").text
 
         # 2. Inconclusive live check keeps session intact
         clock[0] += 60
@@ -878,7 +884,7 @@ def test_live_check_access_updates_status_and_handles_failure_and_inconclusive(
         status = client.get("/connections/status").json()["providers"][0]
         assert status["state"] == "connected"
         assert status["last_check"]["state"] == "inconclusive"
-        assert "Live check was inconclusive" in client.get("/connections/").text
+        assert "Live check was inconclusive" in client.get("/").text
 
         # 3. Failing live check surfaces failure banner
         clock[0] += 60
@@ -901,7 +907,7 @@ def test_live_check_access_updates_status_and_handles_failure_and_inconclusive(
         status = client.get("/connections/status").json()["providers"][0]
         assert status["state"] == "needs_signin"
         assert status["last_check"]["state"] == "failed"
-        assert "Live check failed" in client.get("/connections/").text
+        assert "Live check failed" in client.get("/").text
         service.session_checkpoint = orig_checkpoint
 
 
@@ -931,7 +937,7 @@ def test_shared_subscription_card_shows_owner_access_health_without_private_ids(
         access.choose("bob", "fixture", "alice", row["revision"], grant)
 
         browser_login(app, client, "bob")
-        page = unescape(client.get("/connections/").text)
+        page = unescape(client.get("/").text)
         assert "Using alice's subscription (Working)" in page
 
         # Degrade Alice's subscription with a private incident ID; Bob sees Degraded
@@ -948,7 +954,7 @@ def test_shared_subscription_card_shows_owner_access_health_without_private_ids(
                 incident_id=private_incident,
             )
         )
-        page = unescape(client.get("/connections/").text)
+        page = unescape(client.get("/").text)
         assert "Using alice's subscription (Degraded)" in page
         assert private_incident not in page
 
@@ -1221,3 +1227,93 @@ def test_disconnected_or_interactive_subscription_does_not_request_recovery(
     assert envelope.get("recovery_id") is None
     assert envelope["action"] != "renewal_pending"
     assert recovery_store.load("fixture") is None
+
+
+def test_canonical_root_home_and_legacy_connections_redirects(accounts, tmp_path):
+    from urllib.parse import urlsplit
+
+    app, _, _ = make_app(accounts, tmp_path)
+    origin = {"origin": "http://127.0.0.1"}
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        # Signed-out GET / redirects to /connections/login.
+        signed_out = client.get("/", follow_redirects=False)
+        assert signed_out.status_code == 303
+        assert signed_out.headers["location"] == "/connections/login"
+
+        # Legacy /connections and /connections/ return 308 -> / with no-store.
+        for legacy_path in ("/connections", "/connections/"):
+            resp = client.get(legacy_path, follow_redirects=False)
+            assert resp.status_code == 308
+            assert resp.headers["location"] == "/"
+            assert resp.headers["cache-control"] == "no-store"
+
+        # OIDC callback redirects 303 -> /.
+        start = client.get("/connections/login", follow_redirects=False)
+        provider = app.state.oidc_provider
+        provider.tamper = {"person_id": "alice"}
+        callback = urlsplit(
+            provider.authorize(start.headers["location"], subject="subject-alice")
+        )
+        cb_resp = client.get(
+            callback.path + "?" + callback.query, follow_redirects=False
+        )
+        assert cb_resp.status_code == 303
+        assert cb_resp.headers["location"] == "/"
+
+        # Signed-in GET / returns 200; legacy paths still return 308 -> /.
+        home = client.get("/", follow_redirects=False)
+        assert home.status_code == 200
+        assert "News subscriptions" in home.text
+        for legacy_path in ("/connections", "/connections/"):
+            resp = client.get(legacy_path, follow_redirects=False)
+            assert resp.status_code == 308
+            assert resp.headers["location"] == "/"
+            assert resp.headers["cache-control"] == "no-store"
+
+        # POST /connections/cancel redirects 303 -> /.
+        owner_connection(client)
+        revision = app.state.connections.controls["alice"].status("fixture")["revision"]
+        cancelled = client.post(
+            "/connections/cancel",
+            data={"provider": "fixture", "revision": revision},
+            headers=origin,
+            follow_redirects=False,
+        )
+        assert cancelled.status_code == 303
+        assert cancelled.headers["location"] == "/"
+
+        # POST /connections/check-all redirects 303 -> /.
+        checked_all = client.post(
+            "/connections/check-all",
+            content=b"",
+            headers={**origin, "content-type": "application/x-www-form-urlencoded"},
+            follow_redirects=False,
+        )
+        assert checked_all.status_code == 303
+        assert checked_all.headers["location"] == "/"
+
+        # Error pages link back to /.
+        app.state.connections.relays["alice"].links_per_hour = 0
+        limited = client.post(
+            "/connections/start",
+            data={"provider": "fixture"},
+            headers=origin,
+            follow_redirects=False,
+        )
+        assert limited.status_code == 429
+        assert 'href="/"' in limited.text
+
+
+def test_legacy_connections_redirect_respects_public_prefix(accounts, tmp_path):
+    app, _, _ = make_app(
+        accounts,
+        tmp_path,
+        public_url="https://reader.example.com/newsclip",
+        browser_url="https://reader.example.com/newsclip",
+    )
+    with TestClient(app, base_url="https://reader.example.com") as client:
+        for legacy_path in ("/connections", "/connections/"):
+            resp = client.get(legacy_path, follow_redirects=False)
+            assert resp.status_code == 308
+            assert resp.headers["location"] == "/newsclip/"
+            assert resp.headers["cache-control"] == "no-store"

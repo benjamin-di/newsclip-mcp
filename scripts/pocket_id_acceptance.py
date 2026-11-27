@@ -148,7 +148,7 @@ class Identity:
                 "callbackURLs": [base + "/connections/callback"],
                 "isPublic": True,
                 "pkceEnabled": True,
-                "launchURL": base + "/connections/",
+                "launchURL": base + "/",
             },
         )
 

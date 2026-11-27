@@ -3,6 +3,17 @@
 All notable changes are recorded here. This project follows Semantic Versioning.
 Earlier releases are recorded in their release tags.
 
+## [2.4.0] - 2026-11-27
+
+### Changed
+
+- Serve the Newsclip Connections home page at canonical root `/` using `signin-window 0.15.0`, and permanently redirect legacy `GET /connections` and `GET /connections/` (`308`, `Cache-Control: no-store`) to `/` while keeping OIDC and action routes under `/connections/*`.
+
+### Upgrade
+
+- Action required: none.
+- Rollback: compatible with 2.3.4; saved sessions, account controls, and configuration formats are unchanged.
+
 ## [2.3.4] - 2026-11-27
 
 ### Fixed

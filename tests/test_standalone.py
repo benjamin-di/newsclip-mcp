@@ -223,7 +223,7 @@ def test_connection_links_are_isolated_and_do_not_expose_sessions(accounts, tmp_
         ).json()
         assert result["ok"]
         url = result["result"]["url"]
-        assert url.endswith("/connections/#fixture")
+        assert url.endswith("/#fixture")
         assert result["result"]["expires_at"] is None
         assert client.get(url, follow_redirects=False).status_code == 303  # to sign-in
         browser_login(app, client)
@@ -460,7 +460,7 @@ def test_public_prefix_is_used_in_links_and_origin_is_bare(accounts, tmp_path):
         )
         assert response.status_code == 200
         assert response.json()["result"]["url"].startswith(
-            "https://reader.example.com/newsclip/connections/#fixture"
+            "https://reader.example.com/newsclip/#fixture"
         )
         headers["Origin"] += "/newsclip"
         assert (

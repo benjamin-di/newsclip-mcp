@@ -401,7 +401,7 @@ async def main() -> None:
                         contexts[user],
                         owner_pages[user],
                         number,
-                        browser_origin + "/connections/",
+                        browser_origin + "/",
                     )
                     await contexts[user].grant_permissions(
                         ["clipboard-write"], origin=browser_origin
@@ -450,7 +450,7 @@ async def main() -> None:
                         mcp_link, origin, token, user, provider_key
                     )
                     assert link["expires_at"] is None
-                    assert link["url"].startswith(browser_origin + "/connections/")
+                    assert link["url"].startswith(browser_origin + "/#")
                     assert controls.status(provider_key) == before_request
                     page = await contexts[user].new_page()
                     await page.goto(link["url"])
@@ -614,7 +614,7 @@ async def main() -> None:
                 )
                 page = owner_pages["alice"]
                 await page.goto(browser_origin + "/connections/login?reauth=1")
-                await identity.finish_login(page, browser_origin + "/connections/")
+                await identity.finish_login(page, browser_origin + "/")
                 card = page.locator("article").filter(
                     has=page.get_by_role("heading", name="Financial Times", exact=True)
                 )

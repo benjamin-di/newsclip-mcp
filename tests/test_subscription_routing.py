@@ -93,7 +93,7 @@ def test_management_forms_require_browser_identity_origin_and_own_authority(
             == 401
         )
         browser_login(app, browser, "bob")
-        page = browser.get("/connections/").text
+        page = browser.get("/").text
         assert "Use this subscription" in page and "Shared with" in page
         assert (
             browser.post(
@@ -160,7 +160,7 @@ def test_management_forms_require_browser_identity_origin_and_own_authority(
         )
         with pytest.raises(SessionRequiredError, match="account_selection_needed"):
             access.admit("bob", "fixture")
-        assert "No subscription selected" in browser.get("/connections/").text
+        assert "No subscription selected" in browser.get("/").text
 
 
 @pytest.mark.parametrize(
@@ -179,7 +179,7 @@ def test_corrupt_unrelated_record_preserves_healthy_page_controls(accounts, tmp_
     access.path("bob").write_text("synthetic damage")
     with TestClient(app, base_url="http://127.0.0.1") as browser:
         browser_login(app, browser, "alice")
-        page = browser.get("/connections/")
+        page = browser.get("/")
         assert page.status_code == 200
         assert "Connect" in page.text and "Stop sharing" in page.text
         assert "Some shared offers are unavailable" in page.text
@@ -197,7 +197,7 @@ def test_each_decline_control_names_its_offer(accounts, tmp_path):
     for owner in ("alice", "carol"):
         access.share(owner, "fixture", "bob", None)
     page = object.__new__(Connections)
-    page.access, page.home = access, "/connections/"
+    page.access, page.connections_base = access, "/connections/"
     document = html.fromstring(
         page.sharing_body(
             "bob", "fixture", {"state": "needs_signin", "revision": "initial"}
